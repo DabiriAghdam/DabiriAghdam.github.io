@@ -4,5 +4,5 @@ permalink: /cv/
 title: "Curriculum Vitae"
 nav: true
 nav_order: 1
-cv_pdf: dabiriaghdam_CV.pdf
+cv_pdf: Dabiriaghdam_CV.pdf
 ---
