@@ -6,16 +6,16 @@ title: blank # the website title (if blank, full name will be used instead)
 first_name: AmirHossein
 middle_name: 
 last_name: DabiriAghdam
-email: 
+email: amirhossein@ece.ubc.ca
 description: > # the ">" symbol means to ignore newlines until "footer_text:" A simple, whitespace theme for academics. Based on [*folio](https://github.com/bogoli/-folio) design.
 footer_text: >
-# Powered by <a href="https://jekyllrb.com/" target="_blank">Jekyll</a> with <a href="https://github.com/alshedivat/al-folio">al-folio</a> theme.
-#  Hosted by <a href="https://pages.github.com/" target="_blank">GitHub Pages</a>.
+  Powered by <a href="https://jekyllrb.com/" target="_blank">Jekyll</a> with <a href="https://github.com/alshedivat/al-folio">al-folio</a> theme.
+  Hosted by <a href="https://pages.github.com/" target="_blank">GitHub Pages</a>.
 #  Photos from <a href="https://unsplash.com" target="_blank">Unsplash</a>.
 keywords: #jekyll, jekyll-theme, academic-website, portfolio-website  # add your own keywords or leave empty
 
 lang: en # the language of your site (for example: en, fr, cn, ru, etc.)
-icon: ⚛️  # the emoji used as the favicon (alternatively, provide image name in /assets/img/)
+icon: 🌐  # the emoji used as the favicon (alternatively, provide image name in /assets/img/)
 
 url: https://dabiriaghdam.ir # the base hostname & protocol for your site
 baseurl:  # the subpath of your site, e.g. /blog/
@@ -68,7 +68,7 @@ og_image: # The site-wide (default for all links) Open Graph preview image
 
 github_username: DabiriAghdam # your GitHub user name
 gitlab_username: # your GitLab user name
-twitter_username:  # your Twitter handle
+twitter_username: DabiriAghdam # your Twitter handle
 mastodon_username: # your mastodon instance+username in the format instance.tld/@username
 linkedin_username: DabiriAghdam # your LinkedIn user name
 telegram_username:  # your Telegram user name
@@ -79,7 +79,7 @@ orcid_id: # your ORCID ID
 medium_username: # your Medium username
 quora_username: # your Quora username
 publons_id: # your ID on Publons
-research_gate_profile: #
+research_gate_profile: https://www.researchgate.net/profile/Amirhossein-Dabiri-Aghdam #
 blogger_url: # your blogger URL
 work_url: # work page URL
 keybase_username: # your keybase user name
@@ -119,7 +119,7 @@ bing_site_verification:  # out your bing-site-verification ID (Bing Webmaster)
 
 # Pagination
 pagination:
-  enabled: true
+  enabled: false
 
 # Giscus comments (RECOMMENDED)
 # Follow instructions on https://giscus.app/ to setup for your repo to fill out
@@ -248,8 +248,8 @@ display_tags: ['formatting', 'images', 'links', 'math', 'code'] # this tags will
 
 scholar:
 
-  last_name: [Einstein]
-  first_name: [Albert, A.]
+  last_name: [Dabiriaghdam]
+  first_name: [Amirhossein]
 
   style: apa
   locale: en
@@ -275,7 +275,7 @@ scholar:
 filtered_bibtex_keywords: [abbr, abstract, arxiv, bibtex_show, html, pdf, selected, supp, blog, code, poster, slides, website, preview, altmetric]
 
 # Maximum number of authors to be shown for each publication (more authors are visible on click)
-max_author_limit: 3  # leave blank to always show all authors
+max_author_limit:  # leave blank to always show all authors
 more_authors_animation_delay: 10  # more authors are revealed on click using animation; smaller delay means faster animation
 
 

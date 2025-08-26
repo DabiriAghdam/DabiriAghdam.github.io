@@ -2,23 +2,26 @@
 layout: about
 title: About
 permalink: /
-subtitle: #<a href='#'>Affiliations</a>. Address. Contacts. Moto. Etc.
+subtitle: "Ph.D. Student | Deep Learning & Machine Learning Enthusiast | Researcher"
 
 profile:
   align: right
   image: prof_pic.jpg
-  image_circular: true # crops the image to make it circular
+  image_circular: false # crops the image to make it circular
   # address: >
   #   <p>555 your office number</p>
   #   <p>123 your address street</p>
   #   <p>Your City, State 12345</p>
 
 news: false  # includes a list of news items
-selected_papers: false # includes a list of papers marked as "selected={true}"
+selected_papers: true # includes a list of papers marked as "selected={true}"
 social: true  # includes social icons at the bottom of the page
 ---
-Hi, I am AmirHossein DabiriAghdam, a first-year master's student at the University of British Columbia ECE department, advised by Prof. Wang. I hold a BSc in Electrical Engineering with a minor in Computer Engineering from the University of Tehran. My research interests include machine learning, deep learning, reinforcement learning, and their real-world applications. 
 
-I also did an internship at EPFL LTS4 lab, where I had the great pleasure to work with Prof. Frossard on adversarial attacks against neural networks. 
+Hi there! 👋 My name is AmirHossein DabiriAghdam (<span class="persian-name">امیرحسین دبیری اقدم</span>), but you can call me Amir! 😊 I'm a first-year Ph.D. student in the [Electrical and Computer Engineering](https://ece.ubc.ca/) at the [University of British Columbia (UBC)](https://www.ubc.ca/), where I am co-supervised by [Prof. Giuseppe Carenini](https://www.cs.ubc.ca/~carenini/) and [Prof. Lele Wang](https://ece.ubc.ca/lele-wang/). 
 
-Feel free to reach out, I am interested in collaborations and discussions in the exciting realm of AI/ML.
+I hold a M.A.Sc. degree in Electrical and Computer Engineering from UBC as well, and a B.Sc. degree from the [University of Tehran](https://ut.ac.ir/en). During my undergrad, I also did an internship at [EPFL LTS4 lab](https://www.epfl.ch/labs/lts4/), where I  had the privilege of working with [Prof. Pascal Frossard](https://people.epfl.ch/pascal.frossard) on adversarial attacks against neural machine translation models. 🌍
+
+My research interests span machine learning, deep learning, reinforcement learning, and their practical applications in natural language processing. Currently, I am particularly focused on leveraging LLMs as agents for decision-making. 🤖
+
+You can also check out my [Curriculum Vitae](/cv/Dabiriaghdam_CV.pdf) for more details about my academic and professional journey. 📄
