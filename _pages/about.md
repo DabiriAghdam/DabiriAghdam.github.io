@@ -1,6 +1,8 @@
 ---
 layout: about
 title: About
+nav: true
+nav_order: 0
 permalink: /
 subtitle: "Ph.D. Student | Deep Learning & Machine Learning Enthusiast | Researcher"
 
@@ -24,4 +26,4 @@ I hold a M.A.Sc. degree in Electrical and Computer Engineering from UBC as well,
 
 My research interests span machine learning, deep learning, reinforcement learning, and their practical applications in natural language processing. Currently, I am particularly focused on leveraging LLMs as agents for decision-making. 🤖
 
-You can also check out my [Curriculum Vitae](/cv/Dabiriaghdam_CV.pdf) for more details about my academic and professional journey. 📄
+You can also check out my [CV](/cv/Dabiriaghdam_CV.pdf) for more details about my academic and professional journey. 📄
