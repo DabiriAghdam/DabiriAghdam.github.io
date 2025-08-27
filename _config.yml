@@ -193,6 +193,7 @@ keep_files:
   - CNAME
   - .nojekyll
   - .git
+  - assets/img/*.webp
 
 # Plug-ins
 plugins:
