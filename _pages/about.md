@@ -26,4 +26,4 @@ I hold a M.A.Sc. degree in Electrical and Computer Engineering from UBC as well,
 
 My research interests span machine learning, deep learning, reinforcement learning, and their practical applications in natural language processing. Currently, I am particularly focused on leveraging LLMs as agents for decision-making. 🤖
 
-You can also check out my [CV](/cv/Dabiriaghdam_CV.pdf) for more details about my academic and professional journey. 📄
+Feel free to check out my [CV](/assets/pdf/Dabiriaghdam_CV.pdf) for more details about my academic and professional journey. 📄
