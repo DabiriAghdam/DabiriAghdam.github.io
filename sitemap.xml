@@ -1,1 +1,24 @@
-<?xml version="1.0" encoding="UTF-8"?> <urlset xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9 http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd" xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"> <url> <loc>https://dabiriaghdam.ir/</loc> </url> <url> <loc>https://dabiriaghdam.ir/publications/</loc> </url> <url> <loc>https://dabiriaghdam.ir/repositories/</loc> </url> </urlset>
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9 http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd" xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url>
+<loc>https://dabiriaghdam.github.io/news/2026-08-25-preprints/</loc>
+<lastmod>2026-08-25T16:00:00+00:00</lastmod>
+</url>
+<url>
+<loc>https://dabiriaghdam.github.io/news/2026-08-25-fellowship/</loc>
+<lastmod>2026-08-25T17:00:00+00:00</lastmod>
+</url>
+<url>
+<loc>https://dabiriaghdam.github.io/news/2026-08-25-emnlp-oral/</loc>
+<lastmod>2026-08-25T18:00:00+00:00</lastmod>
+</url>
+<url>
+<loc>https://dabiriaghdam.github.io/</loc>
+</url>
+<url>
+<loc>https://dabiriaghdam.github.io/publications/</loc>
+</url>
+<url>
+<loc>https://dabiriaghdam.github.io/repositories/</loc>
+</url>
+</urlset>

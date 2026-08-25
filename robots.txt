@@ -1,4 +1,4 @@
 User-agent: *
 Disallow:
 
-Sitemap: https://dabiriaghdam.ir/sitemap.xml
+Sitemap: https://dabiriaghdam.github.io/sitemap.xml

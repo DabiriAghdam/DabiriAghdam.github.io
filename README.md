@@ -1,4 +1,38 @@
 # al-folio
+
+## Personal-site chatbot
+
+The floating chatbot UI lives in `_includes/chatbot.html`, with browser behavior in
+`assets/js/chatbot.js`. Groq requests go through the Sites-hosted service in
+`chatbot-worker/`, so the API key is never exposed to the browser or committed to Git.
+The proxy restricts browser origins, validates and filters every request, and uses
+persistent per-visitor and site-wide rate limits before calling Groq.
+
+To connect it:
+
+1. Create a Groq API key in the Groq Console.
+2. Install and validate the Sites service:
+
+   ```bash
+   cd chatbot-worker
+   npm install
+   npm test
+   ```
+
+3. Add `GROQ_API_KEY` as a secret in Sites and deploy the service. Copy its
+   deployed URL plus `/api/chat` into `chatbot.endpoint` in
+   `_config.yml`, then rebuild/deploy the Jekyll site.
+
+The deployed proxy permits the production domains plus Jekyll's standard
+`localhost:4000` and `127.0.0.1:4000` development addresses. For a fully local
+chat test, copy `chatbot-worker/.env.example` to `chatbot-worker/.env.local`, add
+the key plus local admin credentials, initialize the local audit database with
+`npx wrangler d1 migrations apply amir-chat-local --local --config wrangler.local.jsonc`,
+and run `npm run dev -- --host localhost --port 8787` from `chatbot-worker`. The
+local Jekyll page automatically switches to
+`http://localhost:8787/api/chat`; production hosts continue using
+`chatbot.endpoint`. Never put the key in `_config.yml` or frontend JavaScript.
+
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [maintainers]: https://img.shields.io/badge/maintainers-3-success.svg 'Number of maintainers'
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
@@ -524,32 +558,6 @@ In both the page-specific and site-wide cases, the `og_image` variable needs to 
 It generates an Atom (RSS-like) feed of your posts, useful for Atom and RSS readers.
 The feed is reachable simply by typing after your homepage `/feed.xml`.
 E.g. assuming your website mountpoint is the main folder, you can type `yourusername.github.io/feed.xml`
-
-## Contributing
-
-Contributions to al-folio are very welcome!
-Before you get started, please take a look at [the guidelines](CONTRIBUTING.md).
-
-If you would like to improve documentation, add your webpage to the list below, or fix a minor inconsistency or bug, please feel free to send a PR directly to `master`.
-For more complex issues/bugs or feature requests, please open an issue using the appropriate template.
-
-### Maintainers
-
-<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
-<!-- prettier-ignore-start -->
-<!-- markdownlint-disable -->
-<table>
-  <tr>
-    <td align="center"><a href="http://maruan.alshedivat.com"><img src="https://avatars.githubusercontent.com/u/2126561?v=4" width="100px;" alt=""/><br /><sub><b>Maruan</b></sub></a></td>
-    <td align="center"><a href="http://rohandebsarkar.github.io"><img src="https://avatars.githubusercontent.com/u/50144004?v=4" width="100px;" alt=""/><br /><sub><b>Rohan Deb Sarkar</b></sub></a></td>
-    <td align="center"><a href="https://amirpourmand.ir"><img src="https://avatars.githubusercontent.com/u/32064808?v=4" width="100px;" alt=""/><br /><sub><b>Amir Pourmand</b></sub></a></td>
-  </tr>
-</table>
-
-<!-- markdownlint-restore -->
-<!-- prettier-ignore-end -->
-
-<!-- ALL-CONTRIBUTORS-LIST:END -->
 
 ## License
 
