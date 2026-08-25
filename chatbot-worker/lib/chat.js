@@ -1,6 +1,7 @@
 import { resetAuditForTests, updateAuditStatus, writeAuditMessage } from "./audit.js";
 import { enforceRateLimit, resetRateLimitsForTests as resetRateLimitState, VISITOR_MINUTE_LIMIT } from "./rate-limit.js";
-import { SYSTEM_PROMPT } from "./context/index.js";
+import { buildSystemPrompt } from "./context/index.js";
+import { recordThrottle } from "./throttle.js";
 
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_MODEL = "openai/gpt-oss-20b";
@@ -49,8 +50,15 @@ function requestLocation(request, ipAddress) {
   const cf = request.cf || {};
   const header = (name) => request.headers.get(name) || "";
   const value = (candidate, fallback = "") => String(candidate ?? fallback).trim().slice(0, 120) || null;
+  // Cloudflare omits these outside its geo-enabled paths, and header() yields "".
+  // Number("") is 0, which is finite and in range, so a blank would otherwise be
+  // stored as a convincing "0.00000" and pin the visitor to Null Island.
   const coordinate = (candidate, fallback, maxAbs) => {
-    const parsed = Number(candidate ?? fallback);
+    const raw = candidate ?? fallback;
+    if (raw === null || raw === undefined) return null;
+    const text = String(raw).trim();
+    if (!text) return null;
+    const parsed = Number(text);
     return Number.isFinite(parsed) && parsed >= -maxAbs && parsed <= maxAbs ? parsed.toFixed(5) : null;
   };
   return {
@@ -395,6 +403,13 @@ export async function handleChatRequest(request, env, ctx) {
   }
   if (!rateLimit.allowed) {
     headers.set("Retry-After", String(rateLimit.retryAfter));
+    // Nothing was written to the audit log on this path, so without this counter a
+    // visitor turned away at the door leaves no trace at all and the assistant can
+    // look healthy while being unusable.
+    const kind = rateLimit.reason === "capacity"
+      ? "site-capacity"
+      : rateLimit.reason === "day" ? "visitor-day" : "visitor-minute";
+    await recordThrottle(env.DB, kind);
     const error = rateLimit.reason === "capacity"
       ? "The assistant has reached today's capacity. Please try again tomorrow."
       : rateLimit.reason === "day"
@@ -455,7 +470,7 @@ export async function handleChatRequest(request, env, ctx) {
       },
       body: JSON.stringify({
         model,
-        messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
+        messages: [{ role: "system", content: buildSystemPrompt() }, ...messages],
         max_completion_tokens: MAX_COMPLETION_TOKENS,
         temperature: 0.3,
         reasoning_effort: "low",
@@ -471,10 +486,25 @@ export async function handleChatRequest(request, env, ctx) {
   }
 
   if (!groqResponse.ok) {
+    const retryAfter = Number(groqResponse.headers.get("Retry-After"));
     console.error("Groq API error", groqResponse.status, await groqResponse.text());
     await updateAuditStatus(env.DB, userAuditId, "model-error");
-    const status = groqResponse.status === 429 ? 429 : 502;
-    return json({ error: status === 429 ? "The assistant is busy. Please wait a moment and try again." : "The assistant is temporarily unavailable." }, status, headers);
+    if (groqResponse.status !== 429) {
+      return json({ error: "The assistant is temporarily unavailable." }, 502, headers);
+    }
+    // A burst against the per-minute token ceiling clears in seconds; an exhausted
+    // daily budget does not, and telling someone to "wait a moment" for something
+    // that returns tomorrow just earns a string of failed retries.
+    const waitsHours = Number.isFinite(retryAfter) && retryAfter > 900;
+    await recordThrottle(env.DB, waitsHours ? "upstream-exhausted" : "upstream-busy");
+    if (Number.isFinite(retryAfter) && retryAfter > 0) {
+      headers.set("Retry-After", String(Math.ceil(retryAfter)));
+    }
+    return json({
+      error: waitsHours
+        ? "The assistant has reached today's usage limit. Please try again tomorrow, or contact Amir directly."
+        : "The assistant is busy right now. Please wait a moment and try again.",
+    }, 429, headers);
   }
 
   if (wantsStream) {

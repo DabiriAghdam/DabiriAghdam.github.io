@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { handleAdminRequest } from "../lib/admin.js";
 
-function mockDb(rows = []) {
-  const state = { credential: null, rows: [...rows], counters: new Map(), counterReads: 0 };
+function mockDb(rows = [], throttle = []) {
+  const state = { credential: null, rows: [...rows], counters: new Map(), counterReads: 0, throttle: [...throttle] };
 
   function operation(sql, args = []) {
     return {
       bind(...nextArgs) { return operation(sql, nextArgs); },
       async all() {
+        if (/FROM chat_throttle_events/i.test(sql)) {
+          return { results: state.throttle.filter((row) => row.day_window >= args[0]) };
+        }
         if (/GROUP BY ip_address/i.test(sql)) return { results: [...state.rows] };
         if (/GROUP BY COALESCE/i.test(sql)) return { results: [{ country: "CA", visitors: 1, messages: state.rows.length }] };
         if (/SELECT session_id, MAX\(created_at\)/i.test(sql)) {
@@ -52,6 +55,7 @@ function mockDb(rows = []) {
             unique_visitors: new Set(state.rows.map((row) => row.ip_address).filter(Boolean)).size,
             blocked_messages: state.rows.filter((row) => row.status.startsWith("blocked-")).length,
             last_24h: state.rows.filter((row) => row.created_at >= now - 86_400_000).length,
+            delivered_24h: state.rows.filter((row) => row.created_at >= now - 86_400_000 && row.role === "assistant" && (row.status === "accepted" || row.status === "truncated")).length,
             older_than_90: state.rows.filter((row) => row.created_at < now - 90 * 86_400_000).length,
           };
         }
@@ -263,4 +267,42 @@ test("does not spend login budget on successful sign-ins or credential-less prob
     assert.equal((await handleAdminRequest(request("/admin", "amir:strong-password", { headers: ip }), env)).status, 200);
   }
   assert.equal([...db.state.counters.keys()].filter((key) => key.startsWith("__admin__")).length, 0);
+});
+
+const DAY_MS = 86_400_000;
+
+function auditRow(overrides = {}) {
+  return {
+    id: 1, session_id: "session-12345678", visitor_hash: "abcdef123456", ip_address: "203.0.113.10",
+    country: "CA", region: "British Columbia", city: "Vancouver", latitude: "49.28270", longitude: "-123.12070",
+    role: "assistant", content: "Hello", reasoning: "", status: "accepted",
+    origin: "https://dabiriaghdam.github.io", model: "openai/gpt-oss-20b", created_at: Date.now(), ...overrides,
+  };
+}
+
+test("shows how many visitors were turned away in the last day", async () => {
+  const today = Math.floor(Date.now() / DAY_MS);
+  const db = mockDb([auditRow()], [{ day_window: today, kind: "visitor-minute", count: 4 }]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /turned away \(24h\)/);
+  assert.match(html, /<strong>4<\/strong>/);
+});
+
+test("stays quiet when only a small share of questions is throttled", async () => {
+  // 2 rejections against 40 delivered answers is noise, not a broken assistant.
+  const today = Math.floor(Date.now() / DAY_MS);
+  const delivered = Array.from({ length: 40 }, (_, index) => auditRow({ id: index + 1 }));
+  const db = mockDb(delivered, [{ day_window: today, kind: "visitor-minute", count: 2 }]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /turned away \(24h\)/);
+  assert.doesNotMatch(html, /Assistant is being throttled/);
+});
+
+test("warns when the provider's daily budget is exhausted", async () => {
+  const today = Math.floor(Date.now() / DAY_MS);
+  const db = mockDb([auditRow()], [{ day_window: today, kind: "upstream-exhausted", count: 3 }]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /Assistant is being throttled/);
+  assert.match(html, /daily budget ran out/);
+  assert.match(html, /by the model provider/);
 });

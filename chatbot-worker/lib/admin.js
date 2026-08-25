@@ -1,4 +1,5 @@
 import { adminAuthConfig, changeAdminPassword, parseBasicAuth, verifyAdminCredentials } from "./admin-auth.js";
+import { getThrottleStats } from "./throttle.js";
 import { auditConfig, countAuditMessages, deleteAuditOlderThan90Days, getAuditLocations, getAuditStats, listAuditConversationPage, listAuditMessages } from "./audit.js";
 import { checkAdminLoginRateLimit, enforceAdminLoginRateLimit } from "./rate-limit.js";
 
@@ -66,10 +67,30 @@ function locationLabel(row) {
   return [row.city, row.region, row.country].filter(Boolean).join(", ") || "Location unavailable";
 }
 
+// Stored coordinates may be null, empty, or a legacy "0.00000" written before
+// absent Cloudflare geo data was rejected at capture time. Number(null) and
+// Number("") both yield 0, so blanks have to be rejected explicitly instead of
+// relying on Number.isFinite, which happily accepts that 0.
+function coordinatePair(row) {
+  const parse = (raw, maxAbs) => {
+    if (raw === null || raw === undefined) return null;
+    const text = String(raw).trim();
+    if (!text) return null;
+    const parsed = Number(text);
+    return Number.isFinite(parsed) && parsed >= -maxAbs && parsed <= maxAbs ? parsed : null;
+  };
+  const latitude = parse(row.latitude, 90);
+  const longitude = parse(row.longitude, 180);
+  if (latitude === null || longitude === null) return null;
+  // Null Island is a sentinel in practice, never a visitor.
+  if (latitude === 0 && longitude === 0) return null;
+  return { latitude, longitude };
+}
+
 function mapDot(row) {
-  const latitude = Number(row.latitude);
-  const longitude = Number(row.longitude);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return "";
+  const point = coordinatePair(row);
+  if (!point) return "";
+  const { latitude, longitude } = point;
   const left = Math.max(1, Math.min(99, ((longitude + 180) / 360) * 100));
   const top = Math.max(1, Math.min(99, ((90 - latitude) / 180) * 100));
   return `<span class="geo-dot" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%" title="${escapeHtml(`${row.ip_address} · ${locationLabel(row)}`)}"></span>`;
@@ -77,14 +98,18 @@ function mapDot(row) {
 
 function renderLocations(locations) {
   const mapPoints = locations.visitors
-    .map((row) => ({
-      ip: row.ip_address || "IP unavailable",
-      location: locationLabel(row),
-      latitude: Number(row.latitude),
-      longitude: Number(row.longitude),
-      messages: Number(row.messages) || 0,
-    }))
-    .filter((row) => Number.isFinite(row.latitude) && Number.isFinite(row.longitude));
+    .map((row) => {
+      const point = coordinatePair(row);
+      if (!point) return null;
+      return {
+        ip: row.ip_address || "IP unavailable",
+        location: locationLabel(row),
+        latitude: point.latitude,
+        longitude: point.longitude,
+        messages: Number(row.messages) || 0,
+      };
+    })
+    .filter(Boolean);
   const maxVisitors = Math.max(1, ...locations.countries.map((row) => Number(row.visitors) || 0));
   const countries = locations.countries.length
     ? locations.countries.map((row) => `<div class="country-row"><div><strong>${escapeHtml(row.country)}</strong><span>${number(row.visitors)} visitor${Number(row.visitors) === 1 ? "" : "s"} · ${number(row.messages)} messages</span></div><div class="country-track"><i style="width:${Math.max(4, ((Number(row.visitors) || 0) / maxVisitors) * 100).toFixed(1)}%"></i></div></div>`).join("")
@@ -94,7 +119,7 @@ function renderLocations(locations) {
     : '<tr><td colspan="4" class="location-empty">No visitors recorded yet.</td></tr>';
   const mapData = escapeHtml(JSON.stringify(mapPoints));
   return `<section class="geo-grid">
-    <div class="panel geo-panel"><div class="panel-head"><div><h2>Visitor geography</h2><p>Approximate IP-based locations supplied by Cloudflare.</p></div></div><div id="geo-map" class="geo-map${mapPoints.length ? "" : " geo-map--empty"}" data-points="${mapData}" role="region" aria-label="Approximate visitor locations on an OpenStreetMap map">${mapPoints.length ? "" : '<span class="map-empty">No coordinates yet</span>'}</div><div class="geo-legend"><span><i class="geo-dot"></i> recorded visitor</span><span>OpenStreetMap · coordinates may be approximate</span></div></div>
+    <div class="panel geo-panel"><div class="panel-head"><div><h2>Visitor geography</h2><p>Approximate IP-based locations supplied by Cloudflare.</p></div></div><div id="geo-map" class="geo-map${mapPoints.length ? "" : " geo-map--empty"}" data-points="${mapData}" role="region" aria-label="Approximate visitor locations on an OpenStreetMap map">${mapPoints.length ? "" : '<span class="map-empty">No precise coordinates available for these visitors.</span>'}</div><div class="geo-legend"><span><i class="geo-dot"></i> recorded visitor</span><span>OpenStreetMap · coordinates may be approximate</span></div></div>
     <div class="panel"><div class="panel-head"><div><h2>Where visitors come from</h2><p>Unique IP addresses grouped by country.</p></div></div><div class="country-list">${countries}</div></div>
     <div class="panel geo-wide"><div class="panel-head"><div><h2>Visitor IPs</h2><p>Most recent activity first.</p></div></div><div class="location-table-wrap"><table class="location-table"><thead><tr><th>IP address</th><th>Approximate location</th><th>Messages</th><th>Last seen</th></tr></thead><tbody>${visitors}</tbody></table></div></div>
   </section>`;
@@ -142,7 +167,30 @@ function renderPagination(filters, pagination) {
   return `<nav class="pagination" aria-label="Conversation pages">${previous}<span class="pagination-label">Page ${pagination.page} of ${pagination.totalPages}</span>${next}</nav>`;
 }
 
-function renderAdmin({ messages, conversations, locations, stats, filters, pagination, username, flash, nonce }) {
+// The signal Amir actually needs is not "how many 429s" but "what share of people
+// who tried to ask something got turned away" — a handful of rejections on a busy
+// day is fine, while the same number on a quiet day means the assistant is broken
+// for most visitors. An exhausted upstream budget is always called out, because at
+// that point the assistant is down until the quota resets rather than merely slow.
+function renderThrottleNotice(throttle, stats) {
+  if (!throttle || throttle.today === 0) return "";
+  const delivered = Number(stats?.delivered_24h || 0);
+  const attempted = delivered + throttle.today;
+  const share = attempted > 0 ? Math.round((throttle.today / attempted) * 100) : 100;
+  const exhausted = Number(throttle.byKind?.["upstream-exhausted"] || 0) > 0;
+  const severe = exhausted || share >= 20;
+  if (!severe) return "";
+  const parts = [];
+  if (throttle.todayOwnLimits > 0) parts.push(`${number(throttle.todayOwnLimits)} by this site's own rate limits`);
+  if (throttle.todayUpstream > 0) parts.push(`${number(throttle.todayUpstream)} by the model provider`);
+  const detail = parts.length ? ` (${parts.join(", ")})` : "";
+  const lead = exhausted
+    ? "The model provider's daily budget ran out today, so the assistant stopped answering until the quota resets."
+    : `About ${share}% of attempted questions were turned away today.`;
+  return `<div class="flash error" role="status"><strong>Assistant is being throttled.</strong> ${escapeHtml(lead)} ${number(throttle.today)} request${throttle.today === 1 ? "" : "s"} rejected in the last day${escapeHtml(detail)}, ${number(throttle.week)} in the last 7 days. Consider raising the caps, trimming the prompt further, or adding a fallback provider.</div>`;
+}
+
+function renderAdmin({ messages, conversations, locations, stats, throttle, filters, pagination, username, flash, nonce }) {
   const sessionsShown = conversations.length;
   const statusOptions = STATUS_OPTIONS.map((status) => `<option value="${status}"${selected(filters.status, status)}>${status}</option>`).join("");
   const flashMarkup = flash ? `<div class="flash ${escapeHtml(flash.type)}" role="status">${escapeHtml(flash.message)}</div>` : "";
@@ -204,8 +252,10 @@ function renderAdmin({ messages, conversations, locations, stats, filters, pagin
     <div class="stat"><strong>${number(stats.unique_visitors)}</strong><span>unique IPs</span></div>
     <div class="stat"><strong>${number(stats.last_24h)}</strong><span>messages in 24 hours</span></div>
     <div class="stat"><strong>${number(stats.blocked_messages)}</strong><span>blocked requests</span></div>
+    <div class="stat${throttle && throttle.today > 0 ? " warn" : ""}"><strong>${number(throttle ? throttle.today : 0)}</strong><span>turned away (24h)</span></div>
     <div class="stat warn"><strong>${number(stats.older_than_90)}</strong><span>older than 90 days</span></div>
   </section>
+  ${renderThrottleNotice(throttle, stats)}
   ${renderLocations(locations)}
   <section class="panel">
     <div class="panel-head"><div><h2>Search</h2><p>Search message text or a session ID, then narrow by role or processing status.</p></div></div>
@@ -305,10 +355,11 @@ function sameOriginPost(request) {
 async function dashboardResponse(request, env, username, flash) {
   const url = new URL(request.url);
   const filters = filtersFromUrl(url);
-  const [conversationPage, stats, locations] = await Promise.all([
+  const [conversationPage, stats, locations, throttle] = await Promise.all([
     listAuditConversationPage(env.DB, filters, filters.page, CONVERSATIONS_PER_PAGE),
     getAuditStats(env.DB),
     getAuditLocations(env.DB),
+    getThrottleStats(env.DB),
   ]);
   const pageMessages = conversationPage.messages;
   const conversations = groupConversations(pageMessages);
@@ -322,7 +373,7 @@ async function dashboardResponse(request, env, username, flash) {
     end: Math.min(page * CONVERSATIONS_PER_PAGE, totalConversations),
   };
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  return new Response(request.method === "HEAD" ? null : renderAdmin({ messages, conversations, locations, stats, filters, pagination, username, flash, nonce }), {
+  return new Response(request.method === "HEAD" ? null : renderAdmin({ messages, conversations, locations, stats, throttle, filters, pagination, username, flash, nonce }), {
     headers: securityHeaders("text/html; charset=utf-8", nonce),
   });
 }

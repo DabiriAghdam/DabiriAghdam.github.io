@@ -1,8 +1,14 @@
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
-export const VISITOR_MINUTE_LIMIT = 5;
-const VISITOR_DAY_LIMIT = 50;
-const GLOBAL_DAY_LIMIT = 1000;
+// Sized against the Groq free tier for openai/gpt-oss-20b, where tokens bind long
+// before requests do: 8K tokens/minute and 200K tokens/day. A turn costs roughly
+// 3K tokens (a ~2K-token system prompt, resent every turn, plus history and up to
+// 800 completion tokens), which is about 2 turns per minute and ~65 per day.
+// These caps sit just under that so the worker refuses politely and predictably
+// instead of letting Groq 429 with a generic failure.
+export const VISITOR_MINUTE_LIMIT = 3;
+const VISITOR_DAY_LIMIT = 15;
+const GLOBAL_DAY_LIMIT = 60;
 const ADMIN_MINUTE_LIMIT = 10;
 const ADMIN_DAY_LIMIT = 50;
 const fallbackCounters = new Map();

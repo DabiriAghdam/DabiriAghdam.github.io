@@ -183,6 +183,7 @@ export async function getAuditStats(db, now = Date.now()) {
       unique_visitors: new Set(fallbackMessages.map((row) => row.ipAddress || row.visitorHash)).size,
       blocked_messages: fallbackMessages.filter((row) => String(row.status).startsWith("blocked-")).length,
       last_24h: fallbackMessages.filter((row) => row.createdAt >= dayCutoff).length,
+      delivered_24h: fallbackMessages.filter((row) => row.createdAt >= dayCutoff && row.role === "assistant" && (row.status === "accepted" || row.status === "truncated")).length,
       older_than_90: fallbackMessages.filter((row) => row.createdAt < oldCutoff).length,
     };
   }
@@ -193,15 +194,17 @@ export async function getAuditStats(db, now = Date.now()) {
       COUNT(DISTINCT NULLIF(ip_address, '')) AS unique_visitors,
       SUM(CASE WHEN status LIKE 'blocked-%' THEN 1 ELSE 0 END) AS blocked_messages,
       SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS last_24h,
+      SUM(CASE WHEN created_at >= ? AND role = 'assistant' AND status IN ('accepted','truncated') THEN 1 ELSE 0 END) AS delivered_24h,
       SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END) AS older_than_90
     FROM chat_messages
-  `).bind(dayCutoff, oldCutoff).first();
+  `).bind(dayCutoff, dayCutoff, oldCutoff).first();
   return {
     total_messages: Number(row?.total_messages || 0),
     total_sessions: Number(row?.total_sessions || 0),
     unique_visitors: Number(row?.unique_visitors || 0),
     blocked_messages: Number(row?.blocked_messages || 0),
     last_24h: Number(row?.last_24h || 0),
+    delivered_24h: Number(row?.delivered_24h || 0),
     older_than_90: Number(row?.older_than_90 || 0),
   };
 }

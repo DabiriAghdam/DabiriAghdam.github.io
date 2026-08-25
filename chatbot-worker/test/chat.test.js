@@ -3,6 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { listAuditMessages, writeAuditMessage } from "../lib/audit.js";
 import { handleChatRequest, resetRateLimitsForTests } from "../lib/chat.js";
 import { limitsForTests } from "../lib/rate-limit.js";
+import { getThrottleStats, resetThrottleForTests } from "../lib/throttle.js";
 
 const realFetch = globalThis.fetch;
 const origin = "https://dabiriaghdam.github.io";
@@ -63,18 +64,22 @@ function mockGroqStream(chunks = ["Hello ", "from a stream."], finishReason = nu
 }
 
 beforeEach(resetRateLimitsForTests);
+beforeEach(resetThrottleForTests);
 afterEach(() => { globalThis.fetch = realFetch; });
 
-test("caps total site usage at one thousand requests per day", () => {
-  assert.equal(limitsForTests.globalDay, 1000);
-  assert.equal(limitsForTests.day, 50);
+test("keeps the daily caps within the Groq free-tier token budget", () => {
+  // gpt-oss-20b free tier allows 200K tokens/day and a turn costs roughly 3K, so
+  // the site-wide cap has to stay near 65 rather than the request-shaped 1,000/day.
+  assert.ok(limitsForTests.globalDay <= 65, "site-wide day cap must fit the token budget");
+  assert.ok(limitsForTests.day < limitsForTests.globalDay, "one visitor must not be able to spend the whole day");
+  assert.ok(limitsForTests.minute * 3000 <= 8000 * 1.2, "per-minute cap must roughly fit the 8K token/minute ceiling");
 });
 
 test("returns the assistant response", async () => {
   const calls = mockGroq("Amir researches LLM agents.", "0", null, "I checked the research context.");
   const response = await handleChatRequest(request([{ role: "user", content: "What does Amir research?" }]), env);
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("RateLimit-Limit"), "5");
+  assert.equal(response.headers.get("RateLimit-Limit"), String(limitsForTests.minute));
   const responseBody = await response.json();
   assert.equal(responseBody.message, "Amir researches LLM agents.");
   assert.doesNotMatch(JSON.stringify(responseBody), /I checked the research context/);
@@ -264,9 +269,9 @@ test("rejects invalid conversation history", async () => {
   assert.equal(response.status, 400);
 });
 
-test("limits a visitor to five requests per minute", async () => {
+test("limits a visitor to the configured requests per minute", async () => {
   mockGroq();
-  for (let index = 0; index < 5; index += 1) {
+  for (let index = 0; index < limitsForTests.minute; index += 1) {
     const response = await handleChatRequest(request([{ role: "user", content: `Question ${index}` }]), env);
     assert.equal(response.status, 200);
   }
@@ -373,4 +378,109 @@ test("anchors the profile to a known freshness date", async () => {
   await handleChatRequest(request([{ role: "user", content: "What is Amir doing lately?" }]), env);
   assert.match(calls[1].messages[0].content, /last updated in August 2026/);
   assert.match(calls[1].messages[0].content, /information may not be current/);
+});
+
+test("stores no coordinates when Cloudflare supplies no geo data", async () => {
+  mockGroq("Amir researches LLM agents.");
+  // Deliberately omits every CF-IP* geo header. Number("") is 0, so a blank used to
+  // be stored as a valid-looking "0.00000" and pinned the visitor to Null Island.
+  const bare = new Request("https://assistant.example/api/chat", {
+    method: "POST",
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "Origin": origin,
+      "CF-Connecting-IP": "203.0.113.77",
+    },
+    body: JSON.stringify({
+      sessionId: "test-session-geo1",
+      messages: [{ role: "user", content: "What does Amir research?" }],
+    }),
+  });
+  const response = await handleChatRequest(bare, env);
+  assert.equal(response.status, 200);
+  const audit = await listAuditMessages(undefined);
+  const row = audit.find((entry) => entry.ipAddress === "203.0.113.77");
+  assert.ok(row, "expected an audit row for the geo-less request");
+  assert.equal(row.latitude, null);
+  assert.equal(row.longitude, null);
+  assert.notEqual(row.latitude, "0.00000");
+});
+
+function mockGroqRateLimited(retryAfter) {
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.model === "meta-llama/llama-prompt-guard-2-22m") {
+      return Response.json({ choices: [{ message: { content: "0" } }] });
+    }
+    return new Response("rate limit reached", {
+      status: 429,
+      headers: retryAfter === null ? {} : { "Retry-After": String(retryAfter) },
+    });
+  };
+}
+
+test("tells visitors to wait a moment when Groq throttles a short burst", async () => {
+  mockGroqRateLimited(12);
+  const response = await handleChatRequest(request([{ role: "user", content: "What does Amir research?" }]), env);
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("Retry-After"), "12");
+  const body = await response.json();
+  assert.match(body.error, /wait a moment/i);
+  assert.doesNotMatch(body.error, /tomorrow/i);
+});
+
+test("tells visitors to come back tomorrow when the daily budget is gone", async () => {
+  // Groq reports a multi-hour Retry-After once the day's token budget is spent;
+  // "wait a moment" there just buys a string of failed retries.
+  mockGroqRateLimited(7200);
+  const response = await handleChatRequest(request([{ role: "user", content: "What does Amir research?" }]), env);
+  assert.equal(response.status, 429);
+  const body = await response.json();
+  assert.match(body.error, /today's usage limit/i);
+  assert.match(body.error, /tomorrow/i);
+});
+
+test("counts visitors turned away by this site's own rate limit", async () => {
+  mockGroq();
+  for (let index = 0; index < limitsForTests.minute; index += 1) {
+    await handleChatRequest(request([{ role: "user", content: `Question ${index}` }]), env);
+  }
+  const before = await getThrottleStats(undefined);
+  assert.equal(before.today, 0, "nothing should be counted while requests are allowed");
+
+  const blocked = await handleChatRequest(request([{ role: "user", content: "One too many" }]), env);
+  assert.equal(blocked.status, 429);
+  const after = await getThrottleStats(undefined);
+  assert.equal(after.today, 1);
+  assert.equal(after.byKind["visitor-minute"], 1);
+  assert.equal(after.todayOwnLimits, 1);
+  assert.equal(after.todayUpstream, 0);
+});
+
+test("separates a provider throttle from this site's own limits", async () => {
+  mockGroqRateLimited(12);
+  await handleChatRequest(request([{ role: "user", content: "What does Amir research?" }]), env);
+  mockGroqRateLimited(7200);
+  await handleChatRequest(request([{ role: "user", content: "What does Amir research?" }], origin, "203.0.113.55"), env);
+
+  const stats = await getThrottleStats(undefined);
+  assert.equal(stats.today, 2);
+  assert.equal(stats.byKind["upstream-busy"], 1);
+  assert.equal(stats.byKind["upstream-exhausted"], 1);
+  assert.equal(stats.todayUpstream, 2);
+  assert.equal(stats.todayOwnLimits, 0, "provider throttling must not be blamed on the site's caps");
+});
+
+test("tells the model today's date without letting it derive an age", async () => {
+  const calls = mockGroq("Amir is a Ph.D. student at UBC.");
+  await handleChatRequest(request([{ role: "user", content: "What is Amir working on now?" }]), env);
+  const systemPrompt = calls[1].messages[0].content;
+  const today = new Date().toISOString().slice(0, 10);
+  assert.match(systemPrompt, new RegExp(`Today is ${today} \\(UTC\\)`));
+  assert.match(systemPrompt, /never to infer Amir's age or birth date/);
+  // The date has to trail the static text: Groq caches on a shared prefix, so a
+  // value that rolls over daily would otherwise invalidate the cache every midnight.
+  assert.ok(systemPrompt.indexOf("Today is") > systemPrompt.indexOf("Publications and preprints"),
+    "the daily date must come after the static context");
 });

@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const chatRateLimits = sqliteTable("chat_rate_limits", {
   visitorHash: text("visitor_hash").primaryKey(),
@@ -39,3 +39,14 @@ export const adminCredentials = sqliteTable("admin_credentials", {
   iterations: integer("iterations").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
+
+// One row per (UTC day, throttle kind) rather than one per rejected request, so a
+// flood of 429s cannot amplify into unbounded writes the way an audit row would.
+export const chatThrottleEvents = sqliteTable("chat_throttle_events", {
+  dayWindow: integer("day_window").notNull(),
+  kind: text("kind").notNull(),
+  count: integer("count").notNull().default(0),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.dayWindow, table.kind] }),
+]);
