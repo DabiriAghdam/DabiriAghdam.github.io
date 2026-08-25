@@ -12,9 +12,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    {%- capture full_name -%}{{ site.first_name }}{% if site.middle_name != blank %} {{ site.middle_name }}{% endif %} {{ site.last_name }}{%- endcapture -%}
     <title>
     {%- if site.title == "blank" -%}
-        {%- capture title -%}{{ site.first_name }} {{ site.middle_name }} {{ site.last_name }}{%- endcapture -%}
+        {%- assign title = full_name -%}
     {%- else -%}
         {%- capture title -%}{{ site.title }}{%- endcapture -%}
     {%- endif -%}
@@ -30,7 +31,7 @@
         {{ title }}
     {%- endif -%}
     </title>
-    <meta name="author" content="{{ site.first_name }} {{ site.middle_name }} {{ site.last_name }}" />
+    <meta name="author" content="{{ full_name }}" />
     <meta name="description" content="{%- if page.description -%}{{ page.description }}{%- else -%}{{ site.description }}{%- endif -%}" />
 {%- if page.keywords or site.keywords %}
     <meta name="keywords" content="{%- if page.keywords -%}{{ page.keywords }}{%- else -%}{{ site.keywords }}{%- endif -%}" />
@@ -41,20 +42,30 @@
     <!-- OpenGraph -->
     <meta property="og:site_name" content="{{ title }}" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="{%- if page.title -%}{{ title }} | {{ page.title }}{%- else -%}{{ title }}{%- endif -%}" />
+    <meta property="og:title" content="{%- if page.url == '/' or page.title == blank -%}{{ title }}{%- else -%}{{ page.title }} | {{ title }}{%- endif -%}" />
     <meta property="og:url" content="{{ page.url | prepend: site.baseurl | prepend: site.url | remove_first: 'index.html' }}" />
     <meta property="og:description" content="{%- if page.description -%}{{ page.description }}{%- else -%}{{ site.description }}{%- endif -%}" />
     {% if page.og_image or site.og_image -%}
     <meta property="og:image" content="{%- if page.og_image -%}{{ page.og_image }}{%- else -%}{{ site.og_image }}{%- endif -%}" />
+    {%- if site.og_image_width %}
+    <meta property="og:image:width" content="{{ site.og_image_width }}" />
+    <meta property="og:image:height" content="{{ site.og_image_height }}" />
+    {%- endif %}
+    {%- if site.og_image_alt %}
+    <meta property="og:image:alt" content="{{ site.og_image_alt }}" />
+    {%- endif %}
     {%- endif %}
     <meta property="og:locale" content="{{ site.lang }}" />
 
     <!-- Twitter card -->
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="{%- if page.title -%}{{ page.title }}{%- else -%}{{ title }}{%- endif -%}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="{%- if page.url == '/' or page.title == blank -%}{{ title }}{%- else -%}{{ page.title }} | {{ title }}{%- endif -%}" />
     <meta name="twitter:description" content="{%- if page.description -%}{{ page.description }}{%- else -%}{{ site.description }}{%- endif -%}" />
     {% if page.og_image or site.og_image -%}
     <meta name="twitter:image" content="{%- if page.og_image -%}{{ page.og_image }}{%- else -%}{{ site.og_image }}{%- endif -%}" />
+    {%- if site.og_image_alt %}
+    <meta name="twitter:image:alt" content="{{ site.og_image_alt }}" />
+    {%- endif %}
     {%- endif %}
     {% if site.twitter_username -%}
     <meta name="twitter:site" content="@{{ site.twitter_username }}" />
@@ -83,10 +94,6 @@
         {%- capture link -%}https://publons.com/a/{{ site.publons_id }}/{%- endcapture -%}
         {%- assign sameaslinks = sameaslinks | push: link -%}
     {%- endif -%}
-    {%- if site.research_gate_profile -%}
-        {%- capture link -%}https://www.researchgate.net/profile/{{site.research_gate_profile}}{%- endcapture -%}
-        {%- assign sameaslinks = sameaslinks | push: link -%}
-    {%- endif -%}
     {%- if site.github_username -%}
         {%- capture link -%}https://github.com/{{ site.github_username }}{%- endcapture -%}
         {%- assign sameaslinks = sameaslinks | push: link -%}
@@ -100,7 +107,7 @@
         {%- assign sameaslinks = sameaslinks | push: link -%}
     {%- endif -%}
     {%- if site.twitter_username -%}
-        {%- capture link -%}https://twitter.com/{{ site.twitter_username }}{%- endcapture -%}
+        {%- capture link -%}https://x.com/{{ site.twitter_username }}{%- endcapture -%}
         {%- assign sameaslinks = sameaslinks | push: link -%}
     {%- endif -%}
     {%- if site.medium_username -%}
@@ -133,10 +140,6 @@
     {%- endif -%}
     {%- if site.gitlab_username -%}
         {%- capture link -%}https://gitlab.com/{{ site.gitlab_username }}{%- endcapture -%}
-        {%- assign sameaslinks = sameaslinks | push: link -%}
-    {%- endif -%}
-    {%- if site.dblp_url -%}
-        {%- capture link -%}{{ site.dblp_url }}{%- endcapture -%}
         {%- assign sameaslinks = sameaslinks | push: link -%}
     {%- endif -%}
     {%- if site.stackoverflow_id -%}
@@ -184,7 +187,7 @@
         "author":
         {
           "@type": "Person",
-          "name": "{{ site.first_name }} {{ site.middle_name }} {{ site.last_name }}"
+          "name": "{{ full_name }}"
         },
         "url": "{{ page.url | prepend: site.baseurl | prepend: site.url }}",
         "@type": "WebSite",
@@ -193,7 +196,7 @@
         {% if sameaslinks != blank -%}
         "sameAs": {{ sameaslinks }},
         {%- endif %}
-        "name": "{{ site.first_name }} {{ site.middle_name }} {{ site.last_name }}",
+        "name": "{{ full_name }}",
         "@context": "https://schema.org"
       }
     </script>

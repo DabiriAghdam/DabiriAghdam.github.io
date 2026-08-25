@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1786319474348,
+      "tag": "0000_cold_metal_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1786321839127,
+      "tag": "0001_blue_earthquake",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786323465350,
+      "tag": "0002_third_mephistopheles",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786577119813,
+      "tag": "0003_dashing_stick",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1787692908567,
+      "tag": "0004_add_reasoning_to_audit",
+      "breakpoints": true
+    }
+  ]
+}

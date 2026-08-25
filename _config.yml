@@ -3,21 +3,24 @@
 # -----------------------------------------------------------------------------
 
 title: blank # the website title (if blank, full name will be used instead)
-first_name: AmirHossein
+first_name: Amirhossein
 middle_name: 
-last_name: DabiriAghdam
-email: amirhossein@ece.ubc.ca
-description: > # the ">" symbol means to ignore newlines until "footer_text:" A simple, whitespace theme for academics. Based on [*folio](https://github.com/bogoli/-folio) design.
+last_name: Dabiriaghdam
+# Keep the direct email address out of the public site markup. Visitors can
+# still reach Amir through the CV or the chatbot's obfuscated contact hint.
+email:
+description: >
+  Amirhossein Dabiriaghdam is a Ph.D. student at UBC researching natural language processing, trustworthy machine learning, and LLM agents for decision-making.
 footer_text: >
   Powered by <a href="https://jekyllrb.com/" target="_blank">Jekyll</a> with <a href="https://github.com/alshedivat/al-folio">al-folio</a> theme.
   Hosted by <a href="https://pages.github.com/" target="_blank">GitHub Pages</a>.
 #  Photos from <a href="https://unsplash.com" target="_blank">Unsplash</a>.
-keywords: #jekyll, jekyll-theme, academic-website, portfolio-website  # add your own keywords or leave empty
+keywords: machine learning, natural language processing, LLM agents, trustworthy AI, multimodal learning, Amirhossein Dabiriaghdam
 
 lang: en # the language of your site (for example: en, fr, cn, ru, etc.)
-icon: 🌐  # the emoji used as the favicon (alternatively, provide image name in /assets/img/)
+icon: ad-mark.png
 
-url: https://dabiriaghdam.ir # the base hostname & protocol for your site
+url: https://dabiriaghdam.github.io # the base hostname & protocol for your site
 baseurl:  # the subpath of your site, e.g. /blog/
 last_updated: true # set to true if you want to display last updated in the footer
 impressum_path:  # set to path to include impressum link in the footer, use the same path as permalink in a page, helps to conform with EU GDPR
@@ -58,9 +61,12 @@ max_width: 800px
 # Open Graph & Schema.org
 # -----------------------------------------------------------------------------
 # Display links to the page with a preview object on social media.
-serve_og_meta: false # Include Open Graph meta tags in the HTML head
-serve_schema_org: false # Include Schema.org in the HTML head
-og_image: # The site-wide (default for all links) Open Graph preview image
+serve_og_meta: true # Include Open Graph meta tags in the HTML head
+serve_schema_org: true # Include Schema.org in the HTML head
+og_image: https://dabiriaghdam.github.io/assets/img/amirhossein-social-card.jpg
+og_image_width: 1200
+og_image_height: 630
+og_image_alt: "Amirhossein Dabiriaghdam — Machine Learning, NLP, LLM Agents"
 
 # -----------------------------------------------------------------------------
 # Social integration
@@ -79,12 +85,12 @@ orcid_id: # your ORCID ID
 medium_username: # your Medium username
 quora_username: # your Quora username
 publons_id: # your ID on Publons
-research_gate_profile: https://www.researchgate.net/profile/Amirhossein-Dabiri-Aghdam #
+research_gate_profile:
 blogger_url: # your blogger URL
 work_url: # work page URL
 keybase_username: # your keybase user name
 wikidata_id: # your wikidata id
-dblp_url: https://dblp.org/pid/341/5463.html # your DBLP profile url
+dblp_url:
 stackoverflow_id: # your stackoverflow id
 kaggle_id: # your kaggle id
 lastfm_id: # your lastfm id
@@ -96,7 +102,8 @@ facebook_id: # your facebook id
 discord_id: # your discord id (18-digit unique numerical identifier)
 
 contact_note: >
-#  You can even add a little note about which of these is the best way to reach you.
+  I am happy to answer questions and chat about research or collaboration, and I welcome speaking invitations. Reach me at:
+  <span class="obfuscated-email">amirhossein [at] ece [dot] ubc [dot] ca</span>
 
 # -----------------------------------------------------------------------------
 # Analytics and search engine verification
@@ -185,7 +192,11 @@ kramdown:
 # Includes & excludes
 include: ['_pages']
 exclude:
+  - assets/img/prof_pic-480.webp
+  - assets/img/prof_pic-800.webp
+  - assets/img/prof_pic-1400.webp
   - bin
+  - chatbot-worker
   - Gemfile
   - Gemfile.lock
   - vendor
@@ -193,7 +204,6 @@ keep_files:
   - CNAME
   - .nojekyll
   - .git
-  - assets/img/*.webp
 
 # Plug-ins
 plugins:
@@ -340,6 +350,14 @@ enable_project_categories:  true   # enables categorization of projects into
                                    # multiple categories
 enable_medium_zoom:         true   # enables image zoom feature (as on medium.com)
 enable_progressbar:         true   # enables a horizontal progress bar linked to the vertical scroll position
+
+# Personal-site chatbot. Deploy chatbot-worker/ first, then paste its URL here.
+# Keep the Groq API key in the Worker secret; never add it to this file.
+chatbot:
+  enabled: true
+  endpoint: "https://amir-groq-chat-proxy.amirhossein1378.chatgpt.site/api/chat"
+  # Local browser hosts use this worker; deployed hosts use endpoint above.
+  local_endpoint: "http://localhost:8787/api/chat"
 
 # -----------------------------------------------------------------------------
 # Library versions

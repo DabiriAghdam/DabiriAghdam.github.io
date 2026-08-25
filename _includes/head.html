@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@{{ site.fontawesome.version }}/css/all.min.css" integrity="{{ site.fontawesome.integrity }}" crossorigin="anonymous">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/academicons@{{ site.academicons.version }}/css/academicons.min.css" integrity="{{ site.academicons.integrity }}" crossorigin="anonymous">
     <link rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700|Roboto+Slab:100,300,400,500,700|Material+Icons">
-    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@v30.1.0/dist/font-face.css" rel="stylesheet" type="text/css" />
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazir-font@68833b2c255d96d38b517acdf327b6367e9e8d67/dist/font-face.css" rel="stylesheet" type="text/css" integrity="sha384-3nLhreaamSzc4fVJt7fLtLIkVw5P7u+CMr+9W0L4e5oLYJggDQgnDA1T5pZwj2i8" crossorigin="anonymous" />
 
     <!-- Code Syntax Highlighting -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jwarby/jekyll-pygments-themes@master/{{ site.highlight_theme_light | append: '.css' }}" media="" id="highlight_theme_light" />
@@ -21,7 +21,8 @@
     <link rel="shortcut icon" href="{{ site.icon | prepend: '/assets/img/' | relative_url}}"/>
     {% endif %}
     <link rel="stylesheet" href="{{ '/assets/css/main.css' | relative_url }}">
-    <link rel="stylesheet" href="/assets/css/custom.css">
+    {% assign custom_css_revision = site.github.build_revision | default: site.time %}
+    <link rel="stylesheet" href="{{ '/assets/css/custom.css' | relative_url }}?v={{ custom_css_revision | url_encode }}">
     <link rel="canonical" href="{{ page.url | replace:'index.html','' | absolute_url }}">
     
     <!-- Dark Mode -->

@@ -1,4 +1,12 @@
 source 'https://rubygems.org'
+
+# Native extensions in the locked Jekyll stack invoke rake during installation.
+gem 'rake'
+gem 'csv'
+gem 'ostruct'
+gem 'observer'
+gem 'bibtex-ruby', '~> 6.2'
+
 group :jekyll_plugins do
     # gem 'wdm', '~> 0.1.0'  #comment when deploying
     gem 'jekyll'

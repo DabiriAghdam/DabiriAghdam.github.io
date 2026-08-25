@@ -1,19 +1,82 @@
+@article{abaskohi2026unpredictabench,
+  abbr={arXiv},
+  title={UnpredictaBench: A Benchmark for Evaluating Distributional Randomness in {LLMs}},
+  author={Abaskohi*, Amirhossein and Dabiriaghdam*, Amirhossein and Luo, Liang and Wen, Ellie Dingqiao and Wang, Lele and Carenini, Giuseppe and West, Peter},
+  journal={arXiv preprint arXiv:2606.06622},
+  year={2026},
+  status={preprint},
+  note={* Equal contribution},
+  html={https://unpredictabenchmark.github.io/},
+  summary={Introduces a benchmark and KS@N metric for testing whether language models reproduce target probability distributions rather than merely generate diverse-looking samples.}
+}
+
+@article{dabiriaghdam2026vamps,
+  abbr={arXiv},
+  title={{VAMPS}: Visual-Assisted Mathematical Problem Solving Benchmark},
+  author={Dabiriaghdam, Amirhossein and Vassef, Shayan and Bakhtiari, Mohammadreza and Medghalchi, Yasamin and Hacihaliloglu, Ilker and Ohannessian, Mesrob and Wang, Lele and Carenini, Giuseppe},
+  journal={arXiv preprint arXiv:2606.04244},
+  year={2026},
+  status={preprint},
+  html={https://vampsbench.github.io/},
+  summary={Introduces a bilingual multimodal benchmark for studying whether vision-language models can use graphs and visual tools to solve mathematical problems.}
+}
+
+@article{medghalchi2026minor,
+  abbr={arXiv},
+  title={When Minor Edits Matter: {LLM}-Driven Prompt Attack for Medical {VLM} Robustness in Ultrasound},
+  author={Medghalchi, Yasamin and Yazdani, Milad and Dabiriaghdam, Amirhossein and Heidari, Moein and Izadkhah, Mojan and Kavian, Zahra and Carenini, Giuseppe and Wang, Lele and Shahriari, Dena and Hacihaliloglu, Ilker},
+  journal={arXiv preprint arXiv:2603.21047},
+  year={2026},
+  status={preprint},
+  html={https://sonopromptattack.github.io/},
+  summary={Evaluates how realistic prompt rewrites, typos, shorthand, and ambiguity expose robustness gaps in medical vision-language models for ultrasound question answering.}
+}
+
 @article{EMNLP2025,
   abbr={EMNLP 2025},
   title={SimMark: A robust sentence-level similarity-based watermarking algorithm for large language models},
   author={Dabiriaghdam, Amirhossein and Wang, Lele},
-  journal={EMNLP},
+  journal={EMNLP Main},
   year={2025},
+  presentation={Oral Presentation},
+  presentation_rate={(325/8174 = 3.98\%)},
+  status={peer-reviewed},
+  html={https://simmark-llm.github.io/},
+  summary={Introduces a black-box sentence-level watermark based on semantic similarity that remains detectable after paraphrasing while preserving text quality.},
   selected={true}
 }
 
-@article{NAACL2024,
+@inproceedings{vassef-etal-2025-soi,
+  abbr={EMNLP 2025},
+  title={{SOI} Matters: Analyzing Multi-Setting Training Dynamics in Pretrained Language Models via Subsets of Interest},
+  author={Vassef*, Shayan and Dabiriaghdam*, Amirhossein and Bakhtiari*, Mohammadreza and Yaghoobzadeh, Yadollah},
+  booktitle={Proceedings of the 5th Workshop on Multilingual Representation Learning (MRL 2025)},
+  year={2025},
+  status={peer-reviewed},
+  note={* Equal contribution},
+  co_located_with={EMNLP 2025},
+  month={November},
+  pages={322--335},
+  publisher={Association for Computational Linguistics},
+  doi={10.18653/v1/2025.mrl-main.21},
+  html={https://aclanthology.org/2025.mrl-main.21/},
+  pdf={https://aclanthology.org/2025.mrl-main.21.pdf},
+  summary={Introduces Subsets of Interest to track example-level learning dynamics across multi-task, multilingual, and multi-source training and guide targeted fine-tuning.},
+  abstract={This work investigates multi-task, multilingual, and multi-source learning in pretrained language models. It introduces Subsets of Interest, a six-category framework for tracking learning behaviours such as forgettable, unlearned, and always-correct examples. Experiments compare single-setting and multi-setting training through transition heatmaps and dataset cartography across English language tasks, sentiment datasets, and intent classification in French, English, and Persian. Multi-source learning improves out-of-distribution performance by up to 7 percent, while multi-task gains depend on task similarity. A two-stage fine-tuning method using SOI-based subset selection provides further improvements.}
+}
+
+@inproceedings{NAACL2024,
   abbr={NAACL 2024},
   author = {Abaskohi*, Amirhossein and Dabiriaghdam*, Amirhossein and Wang, Lele and Carenini, Giuseppe},
   Title = {BcAmirs at semeval-2024 task 4: Beyond words: A multimodal and multilingual exploration of persuasion in memes},
   Year = {2024},
+  status={peer-reviewed},
   note={* Equal contribution},
-  journal={SemEval @ NAACL},
+  booktitle={Proceedings of the 18th International Workshop on Semantic Evaluation (SemEval-2024)},
+  co_located_with={NAACL 2024},
+  html={https://aclanthology.org/2024.semeval-1.203/},
+  video={https://aclanthology.org/2024.semeval-1.203.mp4},
+  summary={Combines generated image captions with RoBERTa text and CLIP image representations to classify persuasive techniques in multilingual memes.}
 }
 
 @article{ICASSP2023,
@@ -21,6 +84,19 @@
   author = {Sadrizadeh, Sahar and Dabiriaghdam, Amirhossein and Dolamic, Ljiljana and Frossard, Pascal},
   Title = {Targeted Adversarial Attacks Against Neural Machine Translation},
   Year = {2023},
+  status={peer-reviewed},
   journal={ICASSP},
+  html={https://adversarialattacknmt.github.io/},
+  summary={Introduces a targeted white-box attack that inserts chosen keywords into neural machine translations while preserving source-sentence similarity.},
   selected={true}
+}
+
+@mastersthesis{dabiriaghdam2025thesis,
+  abbr={M.A.Sc.},
+  title={Combating Disinformation in the Age of Generative {AI}: From Watermarking {LLMs} to Persuasion Analysis of Memes},
+  author={Dabiriaghdam, Amirhossein},
+  school={The University of British Columbia},
+  year={2025},
+  html={https://open.library.ubc.ca/media/download/pdf/24/1.0449874/3},
+  summary={Examines how watermarking, multimodal meme analysis, and persuasion detection can help address disinformation in the age of generative AI.}
 }

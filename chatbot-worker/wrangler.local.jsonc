@@ -1,0 +1,14 @@
+{
+  "name": "amir-personal-site-chatbot-local",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "amir-chat-local",
+      "database_id": "local",
+      "migrations_dir": "drizzle"
+    }
+  ]
+}

@@ -20,8 +20,10 @@
       {{ content }}
     </div>
 
-    <!-- Footer -->
-    {%- include footer.html %}
+    <!-- Personal-site chatbot -->
+    {%- if site.chatbot.enabled and site.chatbot.endpoint != blank %}
+      {%- include chatbot.html %}
+    {%- endif %}
 
     <!-- JavaScripts -->
     {% include scripts/jquery.html %}

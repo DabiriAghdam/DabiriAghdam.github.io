@@ -7,4 +7,10 @@ _site
 .ruby-version
 .tweet-cache
 vendor
-
+.wrangler
+chatbot-worker/node_modules
+chatbot-worker/.dev.vars*
+chatbot-worker/.env*
+!chatbot-worker/.env.example
+chatbot-worker/.next
+chatbot-worker/dist

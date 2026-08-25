@@ -1,0 +1,83 @@
+<div
+  class="site-chatbot"
+  data-chatbot
+  data-endpoint="{{ site.chatbot.endpoint | escape }}"
+  data-local-endpoint="{{ site.chatbot.local_endpoint | escape }}"
+>
+  <section
+    class="site-chatbot__panel"
+    id="site-chatbot-panel"
+    role="dialog"
+    aria-modal="false"
+    aria-labelledby="site-chatbot-title"
+    hidden
+  >
+    <header class="site-chatbot__header">
+      <div class="site-chatbot__identity">
+        <div>
+          <h2 id="site-chatbot-title">Ask about me!</h2>
+          <p>Research &amp; academic profile</p>
+        </div>
+      </div>
+      <div class="site-chatbot__actions">
+        <button class="site-chatbot__icon-button" type="button" data-chatbot-reset aria-label="Start a new chat" title="Start a new chat" hidden>
+          <i class="fas fa-plus" aria-hidden="true"></i>
+        </button>
+        <button class="site-chatbot__icon-button" type="button" data-chatbot-close aria-label="Close chat">
+          <i class="fas fa-times" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+
+    <div class="site-chatbot__messages" data-chatbot-messages role="log" aria-live="polite" aria-relevant="additions">
+      <div class="site-chatbot__message-row site-chatbot__message-row--assistant">
+        <div class="site-chatbot__message site-chatbot__message--assistant site-chatbot__message--welcome">
+          I know a lot about Amir's work. What would you like to know?
+        </div>
+      </div>
+    </div>
+
+    <div class="site-chatbot__suggestions" data-chatbot-suggestions aria-label="Suggested questions">
+      <button type="button">What does Amir research?</button>
+      <button type="button">Summarize his background</button>
+      <button type="button">Where can I find his publications?</button>
+      <button type="button">Is Amir open to collaborations?</button>
+      <button type="button">Can I invite Amir to speak?</button>
+      <button type="button">What languages does Amir speak?</button>
+      <button type="button">What does Amir do outside research?</button>
+    </div>
+
+    <footer class="site-chatbot__composer">
+      <form class="site-chatbot__form" data-chatbot-form>
+        <label class="sr-only" for="site-chatbot-input">Message Amir's AI assistant</label>
+        <textarea
+          id="site-chatbot-input"
+          data-chatbot-input
+          rows="1"
+          maxlength="400"
+          placeholder="Ask about Amir's work…"
+          autocomplete="off"
+          spellcheck="true"
+        ></textarea>
+        <button type="submit" data-chatbot-send aria-label="Send message">
+          <i class="fas fa-arrow-up" aria-hidden="true"></i>
+        </button>
+      </form>
+      <p class="site-chatbot__privacy">AI can make mistakes. Chats are logged; avoid sensitive details.</p>
+    </footer>
+  </section>
+
+  <button
+    class="site-chatbot__launcher"
+    type="button"
+    data-chatbot-open
+    aria-controls="site-chatbot-panel"
+    aria-expanded="false"
+    aria-label="Open AI assistant"
+  >
+    <i class="fas fa-comment-dots" aria-hidden="true"></i>
+    <span>Ask about me!</span>
+  </button>
+</div>
+
+<script defer src="{{ '/assets/js/chatbot.js' | relative_url }}"></script>
