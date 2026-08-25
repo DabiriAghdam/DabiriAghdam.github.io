@@ -18,7 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     - name: Setup Ruby
       uses: ruby/setup-ruby@v1
       with:
@@ -40,6 +42,16 @@ jobs:
         fi
         echo "DEPLOY_BRANCH=gh-pages" >> $GITHUB_OUTPUT
     - name: Deploy website
-      run:  yes | bash bin/deploy --verbose ${{ steps.setup.outputs.NO_PUSH }}
-                    --src ${{ steps.setup.outputs.SRC_BRANCH }}
-                    --deploy ${{ steps.setup.outputs.DEPLOY_BRANCH }}
+      run: |
+        set -euo pipefail
+        bundle exec jekyll build
+        git config user.name "GitHub Action"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git fetch origin "${{ steps.setup.outputs.DEPLOY_BRANCH }}"
+        git worktree add --detach /tmp/gh-pages "origin/${{ steps.setup.outputs.DEPLOY_BRANCH }}"
+        find /tmp/gh-pages -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+        cp -R _site/. /tmp/gh-pages/
+        touch /tmp/gh-pages/.nojekyll
+        git -C /tmp/gh-pages add -A
+        git -C /tmp/gh-pages commit --allow-empty -m "${GITHUB_SHA} [ci skip]"
+        git -C /tmp/gh-pages push origin "HEAD:${{ steps.setup.outputs.DEPLOY_BRANCH }}"
