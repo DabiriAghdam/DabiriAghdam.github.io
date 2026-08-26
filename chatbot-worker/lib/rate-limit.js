@@ -3,10 +3,15 @@ const DAY_MS = 86_400_000;
 // Sized against the Groq free tier for openai/gpt-oss-20b, where tokens bind long
 // before requests do: 8K tokens/minute and 200K tokens/day. A turn costs roughly
 // 3K tokens (a ~2K-token system prompt, resent every turn, plus history and up to
-// 800 completion tokens), which is about 2 turns per minute and ~65 per day.
-// These caps sit just under that so the worker refuses politely and predictably
-// instead of letting Groq 429 with a generic failure.
-export const VISITOR_MINUTE_LIMIT = 3;
+// 800 completion tokens), so the day caps are what protect the 200K budget.
+//
+// The per-minute cap is deliberately NOT squeezed down to the ~2 turns/minute the
+// token ceiling implies. It governs burst behaviour, not the daily budget, and the
+// panel offers follow-up suggestion chips: at 3/minute, clicking two of them in a
+// row hits a hard error and the assistant looks broken. Groq's own 429 is the
+// backstop for a genuine token burst, and it now returns a friendly message and is
+// counted on the admin page, so it is the better place to absorb a short spike.
+export const VISITOR_MINUTE_LIMIT = 5;
 const VISITOR_DAY_LIMIT = 15;
 const GLOBAL_DAY_LIMIT = 60;
 const ADMIN_MINUTE_LIMIT = 10;
