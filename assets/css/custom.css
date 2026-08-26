@@ -618,9 +618,15 @@ html {
   display: flex;
   gap: 7px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   padding: 0 18px 14px;
   background: color-mix(in srgb, var(--global-text-color) 1.5%, var(--global-bg-color));
   scrollbar-width: none;
+  cursor: grab;
+}
+
+.site-chatbot__suggestions:active {
+  cursor: grabbing;
 }
 
 .site-chatbot__suggestions[hidden] {

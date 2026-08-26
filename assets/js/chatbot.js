@@ -89,6 +89,18 @@
     suggestions.hidden = safeQuestions.length === 0;
   };
 
+  // Mouse wheels normally scroll vertically, while this row is intentionally
+  // horizontal. Translate vertical wheel movement only when the row can still
+  // move in that direction; at either edge the page keeps its normal scrolling.
+  suggestions.addEventListener("wheel", (event) => {
+    if (suggestions.scrollWidth <= suggestions.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    const maxScroll = suggestions.scrollWidth - suggestions.clientWidth;
+    const canScroll = event.deltaY < 0 ? suggestions.scrollLeft > 0 : suggestions.scrollLeft < maxScroll;
+    if (!canScroll) return;
+    event.preventDefault();
+    suggestions.scrollLeft = Math.max(0, Math.min(maxScroll, suggestions.scrollLeft + event.deltaY));
+  }, { passive: false });
+
   const appendInlineMarkdown = (parent, value) => {
     const pattern = /(`[^`\n]+`|\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|\*\*([^*\n]+)\*\*|__([^_\n]+)__|~~([^~\n]+)~~|\*([^*\n]+)\*|_([^_\n]+)_)/g;
     let cursor = 0;
