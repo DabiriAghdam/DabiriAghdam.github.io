@@ -50,3 +50,12 @@ export const chatThrottleEvents = sqliteTable("chat_throttle_events", {
 }, (table) => [
   primaryKey({ columns: [table.dayWindow, table.kind] }),
 ]);
+
+// One row, id 1. Records when the activity digest was last mailed so a restart, a new
+// isolate, or a manual send from the dashboard cannot cause a second report covering
+// the same period. See lib/digest.js.
+export const chatDigestState = sqliteTable("chat_digest_state", {
+  id: integer("id").primaryKey(),
+  lastSentAt: integer("last_sent_at").notNull(),
+  lastStatus: text("last_status"),
+});

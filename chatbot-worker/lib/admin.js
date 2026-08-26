@@ -1,8 +1,13 @@
 import { adminAuthConfig, changeAdminPassword, parseBasicAuth, verifyAdminCredentials } from "./admin-auth.js";
 import { getThrottleStats } from "./throttle.js";
+import { digestEnabled, digestIntervalDays, maybeSendDigest, nextDigestDue, readDigestState } from "./digest.js";
 import { activeProviders } from "./providers.js";
-import { auditConfig, countAuditMessages, deleteAuditOlderThan90Days, getAuditLocations, getAuditStats, listAuditConversationPage, listAuditMessages } from "./audit.js";
+import { auditConfig, countAuditMessages, deleteAuditConversation, deleteAuditOlderThan90Days, getAuditLocations, getAuditStats, importAuditMessages, listAuditConversationPage, listAuditMessages } from "./audit.js";
 import { checkAdminLoginRateLimit, enforceAdminLoginRateLimit } from "./rate-limit.js";
+
+// 5,000 messages at a generous 4KB each, with room for the envelope. Comfortably
+// above any real export from this site and far below what would exhaust the worker.
+const MAX_IMPORT_CHARS = 24_000_000;
 
 const STATUS_OPTIONS = ["accepted", "pending", "blocked-local", "blocked-guard", "blocked-provider", "guard-error", "model-error", "empty-response", "truncated"];
 const CONVERSATIONS_PER_PAGE = 10;
@@ -118,10 +123,13 @@ function renderLocations(locations) {
   const visitors = locations.visitors.length
     ? locations.visitors.slice(0, 25).map((row) => `<tr><td><code>${escapeHtml(row.ip_address || "Unknown")}</code></td><td>${escapeHtml(locationLabel(row))}</td><td>${number(row.messages)}</td><td>${escapeHtml(formatTime(row.latest))}</td></tr>`).join("")
     : '<tr><td colspan="4" class="location-empty">No visitors recorded yet.</td></tr>';
-  const mapData = escapeHtml(JSON.stringify(mapPoints));
+  const mapPanel = mapPoints.length
+    ? `<div class="panel geo-panel"><div class="panel-head"><div><h2>Visitor geography</h2><p>Approximate IP-based coordinates supplied by the edge network.</p></div></div><div id="geo-map" class="geo-map" data-points="${escapeHtml(JSON.stringify(mapPoints))}" role="region" aria-label="Approximate visitor locations on an OpenStreetMap map"></div><div class="geo-legend"><span><i class="geo-dot"></i> recorded visitor</span><span>OpenStreetMap · coordinates may be approximate</span></div></div>`
+    : "";
+  const countryPanelClass = mapPoints.length ? "panel" : "panel geo-wide";
   return `<section class="geo-grid">
-    <div class="panel geo-panel"><div class="panel-head"><div><h2>Visitor geography</h2><p>Approximate IP-based locations supplied by Cloudflare.</p></div></div><div id="geo-map" class="geo-map${mapPoints.length ? "" : " geo-map--empty"}" data-points="${mapData}" role="region" aria-label="Approximate visitor locations on an OpenStreetMap map">${mapPoints.length ? "" : '<span class="map-empty">No precise coordinates available for these visitors.</span>'}</div><div class="geo-legend"><span><i class="geo-dot"></i> recorded visitor</span><span>OpenStreetMap · coordinates may be approximate</span></div></div>
-    <div class="panel"><div class="panel-head"><div><h2>Where visitors come from</h2><p>Unique IP addresses grouped by country.</p></div></div><div class="country-list">${countries}</div></div>
+    ${mapPanel}
+    <div class="${countryPanelClass}"><div class="panel-head"><div><h2>Where visitors come from</h2><p>Unique IP addresses grouped by country. Country data can remain available even when precise coordinates are not.</p></div></div><div class="country-list">${countries}</div></div>
     <div class="panel geo-wide"><div class="panel-head"><div><h2>Visitor IPs</h2><p>Most recent activity first.</p></div></div><div class="location-table-wrap"><table class="location-table"><thead><tr><th>IP address</th><th>Approximate location</th><th>Messages</th><th>Last seen</th></tr></thead><tbody>${visitors}</tbody></table></div></div>
   </section>`;
 }
@@ -155,7 +163,12 @@ function renderConversations(conversations) {
           <span><strong>Session ${escapeHtml(String(sessionId).slice(0, 16))}</strong><small>${rows.length} message${rows.length === 1 ? "" : "s"} · ${escapeHtml(formatTime(latest))}</small></span>
           <span class="session-meta"><code>${escapeHtml(first.ip_address || "IP unavailable")}</code><small>${escapeHtml(locationLabel(first))} · ${escapeHtml(first.origin || "unknown origin")}</small></span>
         </summary>
-        <div class="thread">${bubbles}</div>
+        <div class="thread">${bubbles}
+          <form class="thread-actions" method="post" action="/admin/delete-conversation" data-confirm="Permanently delete this conversation and all ${rows.length} of its messages? This cannot be undone.">
+            <input type="hidden" name="session_id" value="${escapeHtml(String(sessionId))}">
+            <button class="danger small" type="submit">Delete this conversation</button>
+          </form>
+        </div>
       </details>
     </article>`;
   }).join("");
@@ -186,6 +199,20 @@ function renderPagination(filters, pagination) {
 // day is fine, while the same number on a quiet day means the assistant is broken
 // for most visitors. An exhausted upstream budget is always called out, because at
 // that point the assistant is down until the quota resets rather than merely slow.
+function renderDigestStatus(digest) {
+  if (!digest?.enabled) {
+    return escapeHtml("Off. Configure the private Google Apps Script relay and set DIGEST_WEBHOOK_URL, DIGEST_WEBHOOK_SECRET, and DIGEST_TO_EMAIL; DIGEST_INTERVAL_DAYS sets how often (7 by default).");
+  }
+  const every = digest.intervalDays === 1 ? "every day" : `every ${digest.intervalDays} days`;
+  const last = digest.state?.lastSentAt
+    ? `Last sent ${formatTime(digest.state.lastSentAt)}.`
+    : "Nothing sent yet — the first digest covers a full period, so it arrives one interval from the first trigger.";
+  const next = digest.next && !digest.next.due
+    ? `Next due ${formatTime(digest.next.at)}.`
+    : "Due now; it goes out on the next trigger.";
+  return escapeHtml(`Emailing ${digest.recipient} ${every}. ${last} ${next}`);
+}
+
 function renderThrottleNotice(throttle, stats, providers = []) {
   if (!throttle || throttle.today === 0) return "";
   const delivered = Number(stats?.delivered_24h || 0);
@@ -204,13 +231,18 @@ function renderThrottleNotice(throttle, stats, providers = []) {
   // Never claim a fallback was tried that has no key configured: that would send the
   // reader looking for a bug in the chain when the fix is to add the missing secret.
   const fallbacks = providers.slice(1);
+  // Five names joined with "and" four times reads as a run-on; the chain is long
+  // enough now that this needs a real list.
+  const named = fallbacks.length > 1
+    ? `${fallbacks.slice(0, -1).join(", ")} and ${fallbacks.at(-1)}`
+    : fallbacks[0];
   const advice = fallbacks.length
-    ? `${fallbacks.join(" and ")} ${fallbacks.length === 1 ? "is" : "are"} already tried before a visitor sees this, so consider raising the caps or trimming the prompt further.`
+    ? `${named} ${fallbacks.length === 1 ? "is" : "are"} already tried before a visitor sees this, so consider raising the caps or trimming the prompt further.`
     : `No fallback provider is configured, so ${providers[0] || "the primary provider"} running out means the assistant stops answering. Adding a GEMINI_API_KEY or OPENROUTER_API_KEY secret would cover this.`;
   return `<div class="flash error" role="status"><strong>Assistant is being throttled.</strong> ${escapeHtml(lead)} ${number(throttle.today)} request${throttle.today === 1 ? "" : "s"} rejected in the last day${escapeHtml(detail)}, ${number(throttle.week)} in the last 7 days. ${escapeHtml(advice)}</div>`;
 }
 
-function renderAdmin({ messages, conversations, locations, stats, throttle, providers, filters, pagination, username, flash, nonce }) {
+function renderAdmin({ messages, conversations, locations, stats, throttle, digest, providers, filters, pagination, username, flash, nonce }) {
   const sessionsShown = conversations.length;
   const statusOptions = STATUS_OPTIONS.map((status) => `<option value="${status}"${selected(filters.status, status)}>${status}</option>`).join("");
   const flashMarkup = flash ? `<div class="flash ${escapeHtml(flash.type)}" role="status">${escapeHtml(flash.message)}</div>` : "";
@@ -232,9 +264,9 @@ function renderAdmin({ messages, conversations, locations, stats, throttle, prov
     .flash{border:1px solid;border-radius:10px;margin-bottom:18px;padding:12px 14px;font-size:14px}.flash.success{background:var(--success-soft);border-color:#abefc6;color:var(--success)}.flash.error{background:var(--danger-soft);border-color:#fecdca;color:var(--danger)}
     .panel{padding:18px;margin-bottom:18px}.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:15px}.panel h2{font-size:16px;margin:0 0 4px}.panel p{color:var(--muted);font-size:13px;line-height:1.5;margin:0}.filters{display:grid;grid-template-columns:minmax(220px,1fr) 150px 175px auto auto;gap:10px;align-items:end}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:12px;font-weight:700;color:var(--muted)}input,select{width:100%;min-height:41px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--text);font:inherit;font-size:14px;padding:9px 11px}
     .results-bar{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:22px 0 10px}.results-bar h2{font-size:17px;margin:0}.results-bar span{color:var(--muted);font-size:13px}.conversation{margin-bottom:10px;overflow:hidden}.pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin:18px 0 28px}.pagination-button{padding:8px 11px;font-size:12px}.pagination-button.is-disabled{cursor:not-allowed;opacity:.45}.pagination-label{color:var(--muted);font-size:12px;font-weight:650;min-width:82px;text-align:center}details>summary{cursor:pointer;display:flex;justify-content:space-between;gap:16px;list-style:none;padding:14px 16px}summary::-webkit-details-marker{display:none}summary>span{display:flex;flex-direction:column;gap:3px}summary strong{font-size:13px}summary small{color:var(--muted);font-size:11px}.session-meta{text-align:right}.session-meta code{font-size:11px;color:var(--accent)}
-    .thread{border-top:1px solid var(--line);background:var(--panel-2);padding:18px}.message-row{max-width:78%;margin-bottom:15px}.message-row:last-child{margin-bottom:0}.message-row.user{margin-left:auto}.message-meta{display:flex;gap:8px;align-items:center;margin:0 4px 5px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.message-row.user .message-meta{justify-content:flex-end}.bubble{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55}.message-row.user .bubble{background:var(--accent);border-color:var(--accent);color:#fff}.reasoning{margin-top:7px;color:var(--muted);font-size:11px}.reasoning summary{cursor:pointer;display:inline-block;padding:3px 0}.reasoning-content{max-height:280px;overflow:auto;margin-top:5px;padding:8px 10px;border-left:2px solid var(--line);background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5}.status{border-radius:99px;background:var(--panel);padding:2px 5px}.model-badge{border-radius:99px;border:1px solid var(--line);padding:2px 6px;color:var(--muted);text-transform:none;letter-spacing:0;font-size:10px;overflow-wrap:anywhere}.status-blocked-local,.status-blocked-guard,.status-blocked-provider,.status-model-error,.status-guard-error{color:var(--danger)}
+    .thread{border-top:1px solid var(--line);background:var(--panel-2);padding:18px}.message-row{max-width:78%;margin-bottom:15px}.message-row:last-child{margin-bottom:0}.message-row.user{margin-left:auto}.message-meta{display:flex;gap:8px;align-items:center;margin:0 4px 5px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.message-row.user .message-meta{justify-content:flex-end}.bubble{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55}.message-row.user .bubble{background:var(--accent);border-color:var(--accent);color:#fff}.reasoning{margin-top:7px;color:var(--muted);font-size:11px}.reasoning summary{cursor:pointer;display:inline-block;padding:3px 0}.reasoning-content{max-height:280px;overflow:auto;margin-top:5px;padding:8px 10px;border-left:2px solid var(--line);background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5}.thread-actions{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;justify-content:flex-end}button.small{font-size:11px;padding:5px 9px}.status{border-radius:99px;background:var(--panel);padding:2px 5px}.model-badge{border-radius:99px;border:1px solid var(--line);padding:2px 6px;color:var(--muted);text-transform:none;letter-spacing:0;font-size:10px;overflow-wrap:anywhere}.status-blocked-local,.status-blocked-guard,.status-blocked-provider,.status-model-error,.status-guard-error{color:var(--danger)}
     .geo-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:18px;margin-bottom:18px}.geo-panel{min-height:300px}.geo-wide{grid-column:1/-1}.geo-map{position:relative;min-height:220px;overflow:hidden;border:1px solid var(--line);border-radius:12px;background-color:var(--panel-2);background-image:linear-gradient(to right,color-mix(in srgb,var(--line) 70%,transparent) 1px,transparent 1px),linear-gradient(to bottom,color-mix(in srgb,var(--line) 70%,transparent) 1px,transparent 1px);background-size:10% 100%,100% 20%}.geo-map:before{content:"";position:absolute;inset:14% 5%;border-radius:48% 42% 50% 40%;background:color-mix(in srgb,var(--accent) 9%,transparent);clip-path:polygon(3% 21%,15% 11%,22% 20%,29% 15%,37% 28%,46% 17%,55% 26%,67% 17%,77% 30%,90% 24%,98% 44%,92% 58%,81% 54%,73% 70%,62% 62%,53% 79%,43% 69%,34% 83%,25% 67%,16% 75%,7% 57%)}.geo-dot{position:absolute;z-index:1;width:10px;height:10px;border:2px solid var(--panel);border-radius:50%;background:var(--accent);box-shadow:0 1px 5px color-mix(in srgb,var(--accent) 60%,transparent);transform:translate(-50%,-50%)}.geo-legend{display:flex;justify-content:space-between;gap:12px;margin-top:9px;color:var(--muted);font-size:11px}.geo-legend .geo-dot{position:static;display:inline-block;width:9px;height:9px;transform:none;margin-right:4px}.map-empty,.location-empty{color:var(--muted);font-size:13px}.map-empty{position:absolute;inset:0;display:grid;place-items:center}.country-list{display:grid;gap:14px}.country-row{display:grid;gap:7px}.country-row>div:first-child{display:flex;justify-content:space-between;gap:8px;font-size:13px}.country-row span{color:var(--muted);font-size:11px}.country-track{height:7px;overflow:hidden;border-radius:99px;background:var(--panel-2)}.country-track i{display:block;height:100%;border-radius:inherit;background:var(--accent)}.location-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}.location-table{width:100%;border-collapse:collapse;font-size:12px}.location-table th,.location-table td{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}.location-table th{background:var(--panel-2);color:var(--muted);font-size:10px;letter-spacing:.05em;text-transform:uppercase}.location-table tr:last-child td{border-bottom:0}
-    .empty{align-items:center;background:var(--panel);border:1px dashed var(--line);border-radius:13px;color:var(--muted);display:flex;flex-direction:column;gap:5px;padding:54px 20px}.empty strong{color:var(--text)}.settings{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:28px}.settings .panel{margin:0}.stack{display:grid;gap:11px;margin-top:15px}.inline-check{display:flex;align-items:flex-start;gap:9px;color:var(--muted);font-size:12px;line-height:1.45}.inline-check input{width:16px;min-height:16px;margin-top:1px}.danger-panel{border-color:#fecdca}.danger-panel h2{color:var(--danger)}.footnote{margin-top:22px;color:var(--muted);font-size:11px;text-align:center}
+    .empty{align-items:center;background:var(--panel);border:1px dashed var(--line);border-radius:13px;color:var(--muted);display:flex;flex-direction:column;gap:5px;padding:54px 20px}.empty strong{color:var(--text)}.settings{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:28px}.settings .panel{margin:0}.stack{display:grid;gap:11px;margin-top:15px}.panel-actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}.inline-check{display:flex;align-items:flex-start;gap:9px;color:var(--muted);font-size:12px;line-height:1.45}.inline-check input{width:16px;min-height:16px;margin-top:1px}.danger-panel{border-color:#fecdca}.danger-panel h2{color:var(--danger)}.footnote{margin-top:22px;color:var(--muted);font-size:11px;text-align:center}
     .geo-map:before{display:none}.geo-map{position:relative;width:100%;height:280px;min-height:0;overflow:hidden;background:var(--panel-2)}.geo-map .leaflet-container{width:100%;height:100%;position:relative;overflow:hidden;background:var(--panel-2);font:inherit}.geo-map .leaflet-pane,.geo-map .leaflet-tile,.geo-map .leaflet-marker-icon,.geo-map .leaflet-marker-shadow,.geo-map .leaflet-tile-container,.geo-map .leaflet-pane>svg,.geo-map .leaflet-pane>canvas,.geo-map .leaflet-zoom-box,.geo-map .leaflet-image-layer,.geo-map .leaflet-layer{position:absolute;left:0;top:0}.geo-map .leaflet-tile{max-width:none;visibility:hidden}.geo-map .leaflet-tile-loaded{visibility:inherit}.geo-map .leaflet-tile-container{pointer-events:none}.geo-map .leaflet-marker-icon,.geo-map .leaflet-marker-shadow{display:block}.geo-map .leaflet-control{position:relative;z-index:800;pointer-events:auto}.geo-map .leaflet-top,.geo-map .leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.geo-map .leaflet-top{top:0}.geo-map .leaflet-bottom{bottom:0}.geo-map .leaflet-left{left:0}.geo-map .leaflet-right{right:0}.geo-map .leaflet-control-attribution{font-size:10px}.geo-map--empty{display:grid;place-items:center}.geo-dot{position:static;display:inline-block;width:9px;height:9px;transform:none;margin-right:4px}
     @media(max-width:1100px){.stats{grid-template-columns:repeat(3,1fr)}.geo-grid{grid-template-columns:1fr}.geo-wide{grid-column:auto}}@media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}.filters{grid-template-columns:1fr 1fr}.filters .search{grid-column:1/-1}.settings{grid-template-columns:1fr}.message-row{max-width:92%}}
     @media(max-width:560px){main{padding:22px 14px 42px}header{flex-direction:column}.stats{grid-template-columns:1fr 1fr}.filters{grid-template-columns:1fr}.filters .search{grid-column:auto}.header-actions,.header-actions .button{width:100%}details>summary{flex-direction:column}.session-meta{text-align:left}.message-row{max-width:100%}}
@@ -298,6 +330,19 @@ function renderAdmin({ messages, conversations, locations, stats, throttle, prov
         <button type="submit">Update password</button>
       </form>
     </div>
+    <div class="panel">
+      <h2>Backup and restore</h2><p>Export writes every message matching the current filters to a JSON file. Restoring merges a file back in: rows keep their original identity, so importing the same backup twice adds nothing the second time, and nothing already stored is deleted or overwritten.</p>
+      <form class="stack" method="post" action="/admin/import" enctype="multipart/form-data">
+        <div class="field"><label for="backup">Exported JSON file</label><input id="backup" name="backup" type="file" accept="application/json,.json" required></div>
+        <div class="panel-actions"><button type="submit">Restore from backup</button><a class="button secondary" href="/admin/export.json">Download backup</a></div>
+      </form>
+    </div>
+    <div class="panel">
+      <h2>Weekly digest</h2><p>${renderDigestStatus(digest)}</p>
+      <form class="stack" method="post" action="/admin/send-digest">
+        <div class="panel-actions"><button type="submit"${digest?.enabled ? "" : " disabled"}>Send one now</button></div>
+      </form>
+    </div>
     <div class="panel danger-panel">
       <h2>Delete old conversations</h2><p>Records are kept indefinitely by default. This permanently deletes every message older than ${auditConfig.manualDeletionAgeDays} days. Newer records are not affected.</p>
       <form class="stack" method="post" action="/admin/delete-old">
@@ -311,6 +356,14 @@ function renderAdmin({ messages, conversations, locations, stats, throttle, prov
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" nonce="${escapeHtml(nonce)}"></script>
 <script nonce="${escapeHtml(nonce)}">
 (() => {
+  // Deletion is irreversible and the button sits at the foot of an expanded thread,
+  // where a stray click is plausible. Confirming on submit rather than on click keeps
+  // it working for keyboard submission too.
+  document.addEventListener("submit", (event) => {
+    const message = event.target instanceof HTMLFormElement && event.target.dataset.confirm;
+    if (message && !window.confirm(message)) event.preventDefault();
+  });
+
   const root = document.documentElement;
   const themeButton = document.getElementById("theme-toggle");
   const systemTheme = () => window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -372,7 +425,7 @@ function sameOriginPost(request) {
   return origin === expected && (!fetchSite || fetchSite === "same-origin");
 }
 
-async function dashboardResponse(request, env, username, flash) {
+async function dashboardResponse(request, env, username, flash, ctx) {
   const url = new URL(request.url);
   const filters = filtersFromUrl(url);
   const [conversationPage, stats, locations, throttle] = await Promise.all([
@@ -381,6 +434,25 @@ async function dashboardResponse(request, env, username, flash) {
     getAuditLocations(env.DB),
     getThrottleStats(env.DB),
   ]);
+  // The digest is the one part of the dashboard that acts on its own, so the panel has
+  // to say when it last did and when it will next — otherwise "did that ever send?" is
+  // only answerable from an inbox.
+  const digest = {
+    enabled: digestEnabled(env),
+    intervalDays: digestIntervalDays(env),
+    recipient: env.DIGEST_TO_EMAIL || "",
+    state: digestEnabled(env) ? await readDigestState(env.DB) : null,
+  };
+  digest.next = digest.enabled ? nextDigestDue(digest.state, digest.intervalDays, Date.now()) : null;
+  // Backstop for the cron trigger. Whether a scheduled handler can be configured
+  // depends on how this worker is deployed, and a digest that silently never fires is
+  // the worst outcome, so an overdue one also goes out when the dashboard is opened.
+  // Deliberately not awaited: the report is a side errand, and a slow mail API must
+  // not hold up the page. Without a ctx to keep the isolate alive it is skipped rather
+  // than started and killed half-sent.
+  if (digest.next?.due && ctx?.waitUntil) {
+    ctx.waitUntil(maybeSendDigest(env, env.DB, Date.now(), { providers: activeProviders(env).map((provider) => provider.name) }));
+  }
   const pageMessages = conversationPage.messages;
   const conversations = groupConversations(pageMessages);
   const { page, totalPages, totalConversations } = conversationPage;
@@ -393,7 +465,7 @@ async function dashboardResponse(request, env, username, flash) {
     end: Math.min(page * CONVERSATIONS_PER_PAGE, totalConversations),
   };
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  return new Response(request.method === "HEAD" ? null : renderAdmin({ messages, conversations, locations, stats, throttle, providers: activeProviders(env).map((provider) => provider.name), filters, pagination, username, flash, nonce }), {
+  return new Response(request.method === "HEAD" ? null : renderAdmin({ messages, conversations, locations, stats, throttle, digest, providers: activeProviders(env).map((provider) => provider.name), filters, pagination, username, flash, nonce }), {
     headers: securityHeaders("text/html; charset=utf-8", nonce),
   });
 }
@@ -404,7 +476,7 @@ function passwordChangedResponse() {
   });
 }
 
-export async function handleAdminRequest(request, env) {
+export async function handleAdminRequest(request, env, ctx) {
   const headers = securityHeaders("text/html; charset=utf-8");
   if (!["GET", "HEAD", "POST"].includes(request.method)) return new Response("Method not allowed", { status: 405, headers });
   if (!env.DB) return new Response("The audit dashboard is not configured.", { status: 503, headers });
@@ -450,6 +522,56 @@ export async function handleAdminRequest(request, env) {
       await changeAdminPassword(env.DB, credentials.username, password);
       return passwordChangedResponse();
     }
+    if (url.pathname === "/admin/delete-conversation") {
+      const sessionId = String(form.get("session_id") || "").trim();
+      if (!sessionId) return dashboardResponse(request, env, credentials.username, { type: "error", message: "No conversation was selected." });
+      const deleted = await deleteAuditConversation(env.DB, sessionId);
+      // A zero here is not an error: another tab, or a second click, may have removed
+      // it already. Saying so beats a success message for something that did nothing.
+      return dashboardResponse(request, env, credentials.username, deleted
+        ? { type: "success", message: `Deleted this conversation and its ${deleted} message${deleted === 1 ? "" : "s"}.` }
+        : { type: "error", message: "That conversation no longer exists." });
+    }
+    if (url.pathname === "/admin/import") {
+      const file = form.get("backup");
+      const text = typeof file === "string" ? file : await file?.text?.();
+      if (!text || !text.trim()) return dashboardResponse(request, env, credentials.username, { type: "error", message: "Choose an exported JSON file to restore." });
+      // JSON.parse on an unbounded string is the one place a signed-in admin can take
+      // the worker down by accident: a wrong file picked from the same folder is
+      // parsed into memory whole, and a Worker has 128MB. The export caps at 5,000
+      // messages, so anything past this is not a backup of this site.
+      if (text.length > MAX_IMPORT_CHARS) {
+        return dashboardResponse(request, env, credentials.username, { type: "error", message: "That file is too large to be a chat export. Export again with filters applied to split it up." });
+      }
+      // A truncated or non-JSON upload must say so plainly. Restoring a backup is the
+      // one admin action taken while something has already gone wrong, so a silent
+      // partial success is the worst possible outcome here.
+      let payload;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        return dashboardResponse(request, env, credentials.username, { type: "error", message: "That file is not valid JSON. Restore the file exactly as it was exported." });
+      }
+      const result = await importAuditMessages(env.DB, payload);
+      if (!result.ok) return dashboardResponse(request, env, credentials.username, { type: "error", message: "That JSON is not a chat export. Expected an exported file, or an array of messages." });
+      const parts = [`Restored ${result.imported} message${result.imported === 1 ? "" : "s"}.`];
+      if (result.duplicates) parts.push(`${result.duplicates} already present.`);
+      if (result.skipped) parts.push(`${result.skipped} unreadable and skipped.`);
+      return dashboardResponse(request, env, credentials.username, {
+        type: result.imported || !result.skipped ? "success" : "error",
+        message: parts.join(" "),
+      });
+    }
+    if (url.pathname === "/admin/send-digest") {
+      if (!digestEnabled(env)) return dashboardResponse(request, env, credentials.username, { type: "error", message: "Email digests are off. Configure the Google Apps Script relay and its three DIGEST settings to turn them on." });
+      const providers = activeProviders(env).map((provider) => provider.name);
+      const result = await maybeSendDigest(env, env.DB, Date.now(), { force: true, providers });
+      if (result.sent) return dashboardResponse(request, env, credentials.username, { type: "success", message: `Digest sent to ${env.DIGEST_TO_EMAIL}. The next scheduled one is now a full interval away.` });
+      // A double-click, or a chat request that got there first, is not a failure worth
+      // an alarming red banner: the report is already on its way.
+      if (result.reason === "in-progress") return dashboardResponse(request, env, credentials.username, { type: "success", message: "A digest is already being sent. Give it a moment before trying again." });
+      return dashboardResponse(request, env, credentials.username, { type: "error", message: `Could not send the digest${result.status ? ` (HTTP ${result.status})` : ""}. ${result.detail || ""}`.trim() });
+    }
     if (url.pathname === "/admin/delete-old") {
       if (form.get("confirm") !== "yes") return dashboardResponse(request, env, credentials.username, { type: "error", message: "Confirm the permanent deletion before continuing." });
       const deleted = await deleteAuditOlderThan90Days(env.DB);
@@ -469,5 +591,5 @@ export async function handleAdminRequest(request, env) {
     });
   }
   if (url.pathname !== "/admin") return new Response("Not found", { status: 404, headers });
-  return dashboardResponse(request, env, credentials.username);
+  return dashboardResponse(request, env, credentials.username, undefined, ctx);
 }

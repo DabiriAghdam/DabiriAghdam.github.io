@@ -26,6 +26,33 @@ const SELECT_SQL = `
 // after a 429 would otherwise write unbounded audit rows, turning a cheap rejection
 // into an expensive one. Failures here are swallowed — losing a statistic must never
 // turn into a failed response for the visitor.
+// Mirrors drizzle/0005_add_throttle_events.sql exactly. Kept here as a self-heal for
+// one specific failure: this table arrived in a later migration than the rest of the
+// schema, so a deploy that ships the code without running 0005 leaves every throttle
+// write failing silently and the dashboard permanently reading zero. That is invisible
+// precisely when it matters — you go looking at the counter *because* visitors are
+// being turned away, and it says nothing is wrong.
+//
+// This is a safety net, not a substitute for the migration: it runs only after a write
+// has already failed, it is idempotent, and if 0005 has been applied it never runs at
+// all. Deliberately not attempted for the audit tables, which carry real data and a
+// history of column changes — guessing at their shape from application code is how you
+// end up with two divergent schemas.
+const CREATE_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS chat_throttle_events (
+    day_window integer NOT NULL,
+    kind text NOT NULL,
+    count integer DEFAULT 0 NOT NULL,
+    updated_at integer NOT NULL,
+    PRIMARY KEY(day_window, kind)
+  )
+`;
+
+// One attempt per isolate. A table that cannot be created is a permissions or binding
+// problem, and retrying it on every rejected request would turn a lost statistic into
+// a second failing write on the path that is already under load.
+let repairAttempted = false;
+
 export async function recordThrottle(db, kind, now = Date.now()) {
   const dayWindow = Math.floor(now / DAY_MS);
   if (!db) {
@@ -36,7 +63,18 @@ export async function recordThrottle(db, kind, now = Date.now()) {
   try {
     await db.prepare(UPSERT_SQL).bind(dayWindow, kind, now).run();
   } catch (error) {
-    console.error("Throttle counter unavailable", error);
+    if (repairAttempted) {
+      console.error("Throttle counter unavailable", error);
+      return;
+    }
+    repairAttempted = true;
+    try {
+      await db.prepare(CREATE_TABLE_SQL).run();
+      await db.prepare(UPSERT_SQL).bind(dayWindow, kind, now).run();
+      console.warn("Created chat_throttle_events; migration 0005 has not been applied to this database.");
+    } catch (repairError) {
+      console.error("Throttle counter unavailable", repairError);
+    }
   }
 }
 
@@ -79,4 +117,5 @@ export async function getThrottleStats(db, now = Date.now()) {
 
 export function resetThrottleForTests() {
   fallbackEvents.clear();
+  repairAttempted = false;
 }

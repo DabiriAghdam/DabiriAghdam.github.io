@@ -3,7 +3,8 @@
 // Groq stays primary: it is the fastest of the three and the only one whose model is
 // pinned, so answers stay consistent. The other two exist so that a Groq outage or an
 // exhausted daily token budget degrades into a slower answer instead of an error,
-// which is the whole point — a visitor who gets "try again tomorrow" simply leaves.
+// which is the whole point — a visitor who gets an apology instead of an answer
+// simply leaves, and never learns the thing they came to the page to find out.
 // Every provider here speaks the OpenAI chat-completions dialect, so the request and
 // SSE parsing are shared apart from the per-provider body quirks noted below.
 
@@ -27,6 +28,19 @@ const MIN_ATTEMPT_MS = 3_000;
 // hang the chain at the one point where no deadline was armed.
 const ERROR_BODY_TIMEOUT_MS = 2_000;
 const MAX_ERROR_BODY_CHARS = 500;
+
+// Google exposes every model through one OpenAI-compatible endpoint and one key, so
+// the entries below vary only by model id. See the note at the call sites for why
+// there are three of them and why they all ask for "minimal" thinking.
+const google = (name, modelVar, defaultModel) => ({
+  name,
+  url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+  keyVar: "GEMINI_API_KEY",
+  modelVar,
+  defaultModel,
+  maxCompletionTokens: 800,
+  extraBody: { reasoning_effort: "minimal" },
+});
 
 const PROVIDERS = [
   {
@@ -62,21 +76,23 @@ const PROVIDERS = [
     maxCompletionTokens: 1600,
     extraBody: { include_reasoning: true, reasoning: { effort: "low" } },
   },
-  {
-    name: "gemini",
-    url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    keyVar: "GEMINI_API_KEY",
-    modelVar: "GEMINI_MODEL",
-    defaultModel: "gemma-4-26b-a4b-it",
-    maxCompletionTokens: 800,
-    // Google's compatibility layer rejects unknown fields outright, so it gets none of
-    // Groq's reasoning flags. Gemma 4 does not accept a thinking *budget* — both
-    // reasoning_effort:"low" and thinking_budget:0 are refused — but it does accept a
-    // thinking *level*, exposed here as reasoning_effort, where only "minimal" and
-    // "high" are valid. "minimal" switches thinking off: the same question costs 14
-    // total tokens instead of 247, and answers arrive in under a second.
-    extraBody: { reasoning_effort: "minimal" },
-  },
+  // Google's three entries differ only in which model they name. They share a key but
+  // not a quota — the free tier is metered per model, so each carries its own 14.4K/day
+  // and 30/min (read off the AI Studio console; Google does not publish these). One
+  // secret therefore buys three independent daily budgets.
+  //
+  // Google's compatibility layer rejects unknown fields outright, so none of Groq's
+  // reasoning flags can be sent here. Gemma 4 does not accept a thinking *budget* —
+  // both reasoning_effort:"low" and thinking_budget:0 are refused — but it does accept
+  // a thinking *level*, exposed as reasoning_effort, where only "minimal" and "high"
+  // are valid. "minimal" switches thinking off: 14 total tokens against 247 for the
+  // same question. Flash-lite is laxer and does accept "low", but "minimal" is still
+  // right for it — "low" spent 195 tokens against 62 and bought nothing on profile Q&A.
+  google("gemini", "GEMINI_MODEL", "gemma-4-26b-a4b-it"),
+  google("gemini-31b", "GEMINI_MODEL_31B", "gemma-4-31b-it"),
+  // Last because its daily allowance is the smallest here, so it is the one worth
+  // conserving for when everything ahead of it has already failed.
+  google("gemini-flash", "GEMINI_FLASH_MODEL", "gemini-3.1-flash-lite"),
 ];
 
 // Most failures advance to the next provider, including 400/401/403/404. Those look
@@ -129,7 +145,7 @@ export function isContentRejection(status, body) {
 // versus "tokens per day (TPD)"), Gemini names "limit per day", and OpenRouter returns
 // "free-models-per-day". Retry-After is the better signal when it is present, but it
 // is not always sent — and a missing header must not be read as "try again shortly",
-// which would tell a visitor to wait a moment for a budget that returns tomorrow.
+// which would tell a visitor to wait a moment for a budget that is gone until midnight.
 const DAILY_EXHAUSTION = /per[ -]day|\bTPD\b|\bRPD\b|\bdaily\b|per day/i;
 
 export function isDailyExhaustion(retryAfter, body = "") {
@@ -157,7 +173,7 @@ export async function callChatProvider(env, { messages, systemPrompt, wantsStrea
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   const attempts = [];
 
-  for (const provider of providers) {
+  for (const [index, provider] of providers.entries()) {
     const remaining = deadline - Date.now();
     if (remaining < MIN_ATTEMPT_MS) {
       attempts.push({ provider: provider.name, status: 0, reason: "deadline" });
@@ -168,7 +184,16 @@ export async function callChatProvider(env, { messages, systemPrompt, wantsStrea
     // Two phases on one controller: a short leash until the headers arrive, then the
     // rest of the shared deadline for the body. A single AbortSignal.timeout cannot
     // express that, because the signal it produces also governs the body stream.
-    const headerBudget = Math.min(wantsStream ? STREAM_HEADER_TIMEOUT_MS : NON_STREAM_TIMEOUT_MS, remaining);
+    // The leash is a share of what is left, not a fixed slice. With a fixed slice the
+    // arithmetic stops working as soon as the chain grows: five providers at ten
+    // seconds each is fifty, and the shared budget is forty-five, so the tail of the
+    // chain could be starved by stalls ahead of it and never get a turn. Dividing the
+    // remainder by the providers still to come keeps the guarantee independent of how
+    // long the chain gets, and a provider that answers quickly hands its unused time
+    // to the ones behind it rather than forfeiting it.
+    const share = Math.floor(remaining / (providers.length - index));
+    const cap = wantsStream ? STREAM_HEADER_TIMEOUT_MS : NON_STREAM_TIMEOUT_MS;
+    const headerBudget = Math.min(cap, Math.max(share, MIN_ATTEMPT_MS), remaining);
     let timer = setTimeout(() => controller.abort(new Error("provider timed out")), headerBudget);
 
     let response;

@@ -1,25 +1,32 @@
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
-// Sized against the whole provider chain, not against Groq alone.
+// Sized to the audience, bounded by the chain.
 //
-// The old numbers assumed a single provider: Groq's 200K tokens/day at roughly 3K
-// tokens a turn is about 66 turns, so the site cap sat at 60. That is no longer the
-// binding constraint. Groq is now the first of three, and when its budget is gone the
-// chain falls through to OpenRouter and Gemini, whose free tiers are metered in
-// requests per day rather than tokens and are far larger. Holding the site to 60 turns
-// a day capped it at Groq-alone capacity while the other two sat unused, and handed
-// visitors "reached today's capacity" with plenty of headroom left.
+// The chain can serve roughly 30,000 turns a day (Groq's 200K tokens at ~3K a turn,
+// OpenRouter's 1,000, and three separately-metered Google models). The site cap is set
+// at 20,000: an expected 250 visitors a day, each entitled to the full per-visitor
+// allowance below, with the remainder left as headroom rather than promised away.
 //
-// The per-visitor day cap of 15 was low enough that ordinary use ran into it: reading
-// through a few papers with follow-up questions gets there, and the site owner testing
-// his own chatbot got locked out of it in an afternoon. A cap nobody should reach in
-// good faith is the point; one that a genuine visitor reaches is just a broken feature.
+// The cost of sizing it that way, written down so it is not rediscovered in an
+// incident: the cap now sits at most of what the chain can serve, so if it ever binds,
+// the provider quotas are close to spent as well and it no longer works as an early
+// warning. The dashboard's "turned away" counter is what surfaces that instead.
 //
-// These caps are intentionally generous enough for normal follow-up use while still
-// bounding abuse. The site-wide cap is the hard budget for all configured providers.
+// The real day-to-day guard is the per-visitor pair, because of how a visitor is
+// identified: the key is a salted hash of the IP, rotated daily. That stops one
+// machine hammering the panel, and 20,000 against 100 means an abuser needs 200
+// distinct addresses to drain a day rather than a handful.
+//
+// Per-visitor day: generous on purpose. Reading through every paper with follow-ups
+// lands around 25 turns, so 100 is not reachable in good faith. A cap a real visitor
+// can hit is a broken feature, not a guard — an earlier value of 15 locked the site
+// owner out of his own chatbot in an afternoon.
+//
+// Per-visitor minute: the panel offers follow-up chips, so clicking a few in a row
+// must never produce a hard error. This governs burst feel, not budget.
 export const VISITOR_MINUTE_LIMIT = 10;
 const VISITOR_DAY_LIMIT = 100;
-const GLOBAL_DAY_LIMIT = 2500;
+const GLOBAL_DAY_LIMIT = 20000;
 const ADMIN_MINUTE_LIMIT = 10;
 const ADMIN_DAY_LIMIT = 50;
 const fallbackCounters = new Map();

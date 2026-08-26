@@ -43,6 +43,13 @@
       "when": 1787700032406,
       "tag": "0005_add_throttle_events",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1787700032407,
+      "tag": "0006_add_digest_state",
+      "breakpoints": true
     }
   ]
 }

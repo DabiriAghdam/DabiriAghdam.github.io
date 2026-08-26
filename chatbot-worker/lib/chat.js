@@ -457,10 +457,16 @@ export async function handleChatRequest(request, env, ctx) {
       ? "site-capacity"
       : rateLimit.reason === "day" ? "visitor-day" : "visitor-minute";
     await recordThrottle(env.DB, kind);
+    // Never "come back tomorrow". It is a dismissal dressed as information: the
+    // visitor is here now, reading this page now, and almost none of them return the
+    // next day to find out whether the budget reset. It is also usually wrong — the
+    // fallback chain spans four separate daily quotas, so a cap hit here is far more
+    // often a burst than a genuinely spent day. Point at the thing that always works
+    // instead, which is Amir's own address.
     const error = rateLimit.reason === "capacity"
-      ? "The assistant has reached today's capacity. Please try again tomorrow."
+      ? "The assistant is handling a lot of questions at the moment. Please try again a little later \u2014 or reach Amir directly at the address on his page."
       : rateLimit.reason === "day"
-        ? "You've reached today's question limit. Please try again tomorrow."
+        ? "You've asked quite a few questions in one sitting. Please give it a little while \u2014 or reach Amir directly at the address on his page."
         : "Too many messages. Please wait a minute and try again.";
     return json({ error }, 429, headers);
   }
@@ -535,8 +541,9 @@ export async function handleChatRequest(request, env, ctx) {
       return json({ error: "The assistant is temporarily unavailable." }, 502, headers);
     }
     // A burst against the per-minute token ceiling clears in seconds; an exhausted
-    // daily budget does not, and telling someone to "wait a moment" for something
-    // that returns tomorrow just earns a string of failed retries.
+    // daily budget does not, and telling someone to "wait a moment" for a budget that
+    // is gone until midnight just earns a string of failed retries. The two messages
+    // differ in how long they ask for, never in naming a day: see the note above.
     // Not "is Retry-After large" but "is this budget coming back today": a 429 with no
     // Retry-After at all used to fall through to the short message and tell a visitor
     // to wait a moment, forever, for a daily budget that returns at midnight.
@@ -547,7 +554,7 @@ export async function handleChatRequest(request, env, ctx) {
     }
     return json({
       error: waitsHours
-        ? "The assistant has reached today's usage limit. Please try again tomorrow, or contact Amir directly."
+        ? "The assistant is at capacity right now. Please try again a little later, or reach Amir directly at the address on his page."
         : "The assistant is busy right now. Please wait a moment and try again.",
     }, 429, headers);
   }

@@ -20,9 +20,9 @@ Hi there, I am Amir! 👋
 
 I'm a Ph.D. student at the [University of British Columbia (UBC)](https://www.ubc.ca/), where I am co-supervised by [Prof. Giuseppe Carenini](https://www.cs.ubc.ca/~carenini/) and [Prof. Lele Wang](https://ece.ubc.ca/lele-wang/).
 
-I hold a master's degree from UBC as well, and a B.Sc. degree from the [University of Tehran](https://ut.ac.ir/en). During my undergrad, I also did an internship at [EPFL LTS4 lab](https://www.epfl.ch/labs/lts4/), where I worked under [Prof. Pascal Frossard](https://people.epfl.ch/pascal.frossard) on adversarial attacks against neural machine translation models.
+I hold a master's degree from UBC as well, and a B.Sc. degree from the [University of Tehran](https://ut.ac.ir/en). During my undergrad, I also did an internship at [EPFL](https://www.epfl.ch/) [LTS4 lab](https://www.epfl.ch/labs/lts4/), where I worked under [Prof. Pascal Frossard](https://people.epfl.ch/pascal.frossard) on adversarial attacks against neural machine translation models.
 
-My research is on large language models, vision-language models, and LLM agents. Right now I am working on agentic multimodal systems for robust and interpretable reasoning: visual tool use, world models for anticipatory reasoning, multi-agent collaboration, and benchmarks that probe where these models actually fail.
+My research is on large language models (LLMs), vision-language models, and LLM agents. Right now I am working on agentic multimodal systems for robust and interpretable reasoning: visual tool use, world models for anticipatory reasoning, multi-agent collaboration, and benchmarks that probe where these models actually fail.
 
 Check out my [CV](/assets/pdf/Dabiriaghdam_CV.pdf) and [publications](/publications/) for more details.
 

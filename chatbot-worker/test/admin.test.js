@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { handleAdminRequest } from "../lib/admin.js";
 
 function mockDb(rows = [], throttle = []) {
-  const state = { credential: null, rows: [...rows], counters: new Map(), counterReads: 0, throttle: [...throttle] };
+  const state = { credential: null, rows: [...rows], counters: new Map(), counterReads: 0, throttle: [...throttle], digest: null };
 
   function operation(sql, args = []) {
     return {
@@ -30,6 +30,7 @@ function mockDb(rows = [], throttle = []) {
       },
       async first() {
         if (/FROM admin_credentials/i.test(sql)) return state.credential;
+        if (/FROM chat_digest_state/i.test(sql)) return state.digest;
         if (/SELECT[\s\S]*FROM chat_rate_limits/i.test(sql)) {
           state.counterReads += 1;
           const counter = state.counters.get(args[0]);
@@ -71,17 +72,71 @@ function mockDb(rows = [], throttle = []) {
         if (/UPDATE admin_credentials/i.test(sql)) {
           state.credential = { username: args[0], password_salt: args[1], password_hash: args[2], iterations: args[3], updated_at: args[4] };
         }
-        if (/DELETE FROM chat_messages/i.test(sql)) {
+        // Match the WHERE clause, not just the table: a session-id delete binds a
+        // string where the age delete binds a timestamp, and treating them alike would
+        // let a wrong query pass its test.
+        if (/DELETE FROM chat_messages WHERE session_id/i.test(sql)) {
+          const before = state.rows.length;
+          state.rows = state.rows.filter((row) => row.session_id !== args[0]);
+          return { meta: { changes: before - state.rows.length } };
+        }
+        if (/DELETE FROM chat_messages WHERE created_at/i.test(sql)) {
           const before = state.rows.length;
           state.rows = state.rows.filter((row) => row.created_at >= args[0]);
           return { meta: { changes: before - state.rows.length } };
+        }
+        // Restore. The real D1 honours the id column and the OR IGNORE, and both are
+        // load-bearing: without them a repeated import silently doubles the log.
+        if (/INSERT OR IGNORE INTO chat_messages/i.test(sql) && /json_each/i.test(sql)) {
+          let changes = 0;
+          for (const row of JSON.parse(args[0])) {
+            if (state.rows.some((existing) => existing.id === row.id)) continue;
+            state.rows.push({ ...row });
+            changes += 1;
+          }
+          return { meta: { changes } };
+        }
+        // The digest claims its slot with a compare-and-swap before mailing, so the
+        // mock has to honour the guarded WHERE. Reporting changes: 1 unconditionally
+        // would hide a broken claim; reporting 0 would hide a working one.
+        if (/UPDATE chat_digest_state/i.test(sql)) {
+          if (/AND last_sent_at = \?/i.test(sql)) {
+            if (!state.digest || state.digest.last_sent_at !== args[1]) return { meta: { changes: 0 } };
+            state.digest = { last_sent_at: args[0], last_status: "sending" };
+            return { meta: { changes: 1 } };
+          }
+          if (!state.digest) return { meta: { changes: 0 } };
+          state.digest = { last_sent_at: args[0], last_status: args[1] };
+          return { meta: { changes: 1 } };
+        }
+        if (/INSERT OR IGNORE INTO chat_digest_state/i.test(sql)) {
+          if (state.digest) return { meta: { changes: 0 } };
+          state.digest = { last_sent_at: args[0], last_status: "sending" };
+          return { meta: { changes: 1 } };
+        }
+        if (/INSERT INTO chat_digest_state/i.test(sql)) {
+          state.digest = { last_sent_at: args[0], last_status: args[1] };
+          return { meta: { changes: 1 } };
+        }
+        if (/DELETE FROM chat_digest_state/i.test(sql)) {
+          const changes = state.digest ? 1 : 0;
+          state.digest = null;
+          return { meta: { changes } };
         }
         return { success: true, meta: { changes: 0 } };
       },
     };
   }
 
-  return { state, prepare(sql) { return operation(sql); } };
+  return {
+    state,
+    prepare(sql) { return operation(sql); },
+    async batch(statements) {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
+    },
+  };
 }
 
 function request(path = "/admin", credentials, options = {}) {
@@ -119,6 +174,14 @@ test("renders the full dashboard and bootstraps hashed credentials", async () =>
   assert.match(html, /I checked the profile context/);
   assert.doesNotMatch(db.state.credential.password_hash, /strong-password/);
   assert.match(response.headers.get("Content-Security-Policy"), /frame-ancestors 'none'/);
+});
+
+test("does not render an empty map when the host supplies countries but no coordinates", async () => {
+  const db = mockDb([auditRow({ country: "CA", latitude: null, longitude: null })]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /Where visitors come from/);
+  assert.match(html, /Country data can remain available/);
+  assert.doesNotMatch(html, /id="geo-map"/);
 });
 
 test("paginates conversations ten per page and preserves the page state", async () => {
@@ -339,5 +402,218 @@ test("names the fallback providers that are actually configured", async () => {
   const db = mockDb([auditRow()], [{ day_window: today, kind: "upstream-exhausted", count: 30 }]);
   const env = envWith(db, { GROQ_API_KEY: "k", OPENROUTER_API_KEY: "k", GEMINI_API_KEY: "k" });
   const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), env)).text();
-  assert.match(html, /openrouter and gemini are already tried/);
+  // One Google key configures three Gemini models, so the notice has to read as a
+  // list rather than a chain of "and"s.
+  assert.match(html, /openrouter, gemini, gemini-31b and gemini-flash are already tried/);
+});
+
+const deletePost = (body) => ({
+  method: "POST",
+  headers: { "Content-Type": "application/x-www-form-urlencoded", "Origin": "https://assistant.example" },
+  body: new URLSearchParams(body),
+});
+
+test("deletes one conversation and leaves the others alone", async () => {
+  const db = mockDb([
+    auditRow({ id: 1, session_id: "keep-me", role: "user", content: "Kept question" }),
+    auditRow({ id: 2, session_id: "delete-me", role: "user", content: "Doomed question" }),
+    auditRow({ id: 3, session_id: "delete-me", role: "assistant", content: "Doomed answer" }),
+    auditRow({ id: 4, session_id: "keep-me", role: "assistant", content: "Kept answer" }),
+  ]);
+  const response = await handleAdminRequest(
+    request("/admin/delete-conversation", "amir:strong-password", deletePost({ session_id: "delete-me" })),
+    envWith(db),
+  );
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /Deleted this conversation and its 2 messages/);
+  assert.deepEqual(db.state.rows.map((row) => row.session_id), ["keep-me", "keep-me"]);
+});
+
+test("says so rather than claiming success when the conversation is already gone", async () => {
+  // Two dashboard tabs, or a double submit: reporting a deletion that deleted nothing
+  // would quietly teach the operator to trust a message that is not true.
+  const db = mockDb([auditRow({ id: 1, session_id: "keep-me" })]);
+  const response = await handleAdminRequest(
+    request("/admin/delete-conversation", "amir:strong-password", deletePost({ session_id: "never-existed" })),
+    envWith(db),
+  );
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /no longer exists/);
+  assert.doesNotMatch(html, /Deleted this conversation/);
+  assert.equal(db.state.rows.length, 1);
+});
+
+test("refuses a conversation delete with no session and deletes nothing", async () => {
+  const db = mockDb([auditRow({ id: 1, session_id: "keep-me" }), auditRow({ id: 2, session_id: "also-keep" })]);
+  const response = await handleAdminRequest(
+    request("/admin/delete-conversation", "amir:strong-password", deletePost({ session_id: "   " })),
+    envWith(db),
+  );
+  assert.match(await response.text(), /No conversation was selected/);
+  assert.equal(db.state.rows.length, 2, "a blank session id must never match every row");
+});
+
+test("requires authentication to delete a conversation", async () => {
+  const db = mockDb([auditRow({ id: 1, session_id: "keep-me" })]);
+  const response = await handleAdminRequest(
+    request("/admin/delete-conversation", undefined, deletePost({ session_id: "keep-me" })),
+    envWith(db),
+  );
+  assert.equal(response.status, 401);
+  assert.equal(db.state.rows.length, 1);
+});
+
+test("rejects a cross-origin conversation delete", async () => {
+  const db = mockDb([auditRow({ id: 1, session_id: "keep-me" })]);
+  const response = await handleAdminRequest(request("/admin/delete-conversation", "amir:strong-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "Origin": "https://attacker.example" },
+    body: new URLSearchParams({ session_id: "keep-me" }),
+  }), envWith(db));
+  assert.equal(response.status, 403);
+  assert.equal(db.state.rows.length, 1);
+});
+
+test("renders a confirming delete control on each conversation", async () => {
+  const db = mockDb([auditRow({ id: 1, session_id: "session-12345678", role: "user", content: "Hi" })]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /action="\/admin\/delete-conversation"/);
+  assert.match(html, /name="session_id" value="session-12345678"/);
+  assert.match(html, /data-confirm="[^"]*cannot be undone/);
+});
+
+const exportedBackup = (messages) => JSON.stringify({ exportedAt: "2026-08-20T10:00:00.000Z", messages });
+
+test("restores an exported backup without touching what is already stored", async () => {
+  const db = mockDb([auditRow({ id: 1, session_id: "already-here", role: "user", content: "Existing question" })]);
+  const response = await handleAdminRequest(
+    request("/admin/import", "amir:strong-password", deletePost({
+      backup: exportedBackup([
+        { id: 70, session_id: "restored", role: "user", content: "Restored question", status: "ok", created_at: Date.now() },
+        { id: 71, session_id: "restored", role: "assistant", content: "Restored answer", status: "accepted", created_at: Date.now() },
+      ]),
+    })),
+    envWith(db),
+  );
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  assert.match(html, /Restored 2 messages/);
+  assert.equal(db.state.rows.length, 3, "the restore must merge, never replace");
+  assert.ok(db.state.rows.some((row) => row.session_id === "already-here"));
+});
+
+test("reports duplicates instead of doubling the log on a repeated restore", async () => {
+  const db = mockDb([]);
+  const backup = exportedBackup([
+    { id: 70, session_id: "restored", role: "user", content: "Restored question", status: "ok", created_at: Date.now() },
+  ]);
+  const post = () => handleAdminRequest(request("/admin/import", "amir:strong-password", deletePost({ backup })), envWith(db));
+  await post();
+  const html = await (await post()).text();
+  assert.match(html, /Restored 0 messages/);
+  assert.match(html, /1 already present/);
+  assert.equal(db.state.rows.length, 1);
+});
+
+test("rejects an upload that is not valid JSON rather than importing part of it", async () => {
+  const db = mockDb([]);
+  const response = await handleAdminRequest(
+    request("/admin/import", "amir:strong-password", deletePost({ backup: '{"messages": [{"id": 1,' })),
+    envWith(db),
+  );
+  const html = await response.text();
+  assert.match(html, /not valid JSON/);
+  assert.equal(db.state.rows.length, 0);
+});
+
+test("rejects JSON that parses but is not a chat export", async () => {
+  const db = mockDb([]);
+  const response = await handleAdminRequest(
+    request("/admin/import", "amir:strong-password", deletePost({ backup: '{"settings": {"theme": "dark"}}' })),
+    envWith(db),
+  );
+  assert.match(await response.text(), /not a chat export/);
+  assert.equal(db.state.rows.length, 0);
+});
+
+test("asks for a file instead of reporting a successful empty restore", async () => {
+  const response = await handleAdminRequest(
+    request("/admin/import", "amir:strong-password", deletePost({ backup: "" })),
+    envWith(mockDb([])),
+  );
+  assert.match(await response.text(), /Choose an exported JSON file/);
+});
+
+test("refuses an oversized upload instead of parsing it into memory", async () => {
+  const db = mockDb([]);
+  // Valid JSON, just far too big to be an export from this site. The guard has to fire
+  // before JSON.parse, so this must be rejected on size rather than on shape.
+  const huge = `{"messages":[{"id":1,"content":"${"x".repeat(24_000_001)}"}]}`;
+  const response = await handleAdminRequest(
+    request("/admin/import", "amir:strong-password", deletePost({ backup: huge })),
+    envWith(db),
+  );
+  assert.match(await response.text(), /too large to be a chat export/);
+  assert.equal(db.state.rows.length, 0);
+});
+
+test("requires authentication to restore a backup", async () => {
+  const response = await handleAdminRequest(
+    request("/admin/import", undefined, deletePost({ backup: exportedBackup([]) })),
+    envWith(mockDb([])),
+  );
+  assert.equal(response.status, 401);
+});
+
+test("rejects a cross-origin restore", async () => {
+  const response = await handleAdminRequest(
+    request("/admin/import", "amir:strong-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Origin": "https://evil.example" },
+      body: new URLSearchParams({ backup: exportedBackup([]) }),
+    }),
+    envWith(mockDb([])),
+  );
+  assert.notEqual(response.status, 200);
+});
+
+test("shows the digest as off until it is configured, and offers no dead button", async () => {
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(mockDb([auditRow()])))).text();
+  assert.match(html, /DIGEST_WEBHOOK_URL, DIGEST_WEBHOOK_SECRET, and DIGEST_TO_EMAIL/);
+  assert.match(html, /<button type="submit" disabled>Send one now<\/button>/);
+});
+
+test("reports the schedule and recipient once the digest is configured", async () => {
+  const env = envWith(mockDb([auditRow()]), { DIGEST_WEBHOOK_URL: "https://script.google.com/example", DIGEST_WEBHOOK_SECRET: "secret", DIGEST_TO_EMAIL: "owner@example.com", DIGEST_INTERVAL_DAYS: "14" });
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), env)).text();
+  assert.match(html, /Emailing owner@example\.com every 14 days/);
+});
+
+test("refuses a manual digest send when the feature is off, rather than failing silently", async () => {
+  const response = await handleAdminRequest(
+    request("/admin/send-digest", "amir:strong-password", deletePost({})),
+    envWith(mockDb([])),
+  );
+  assert.match(await response.text(), /Email digests are off/);
+});
+
+test("requires authentication to trigger a digest send", async () => {
+  const response = await handleAdminRequest(
+    request("/admin/send-digest", undefined, deletePost({})),
+    envWith(mockDb([]), { DIGEST_WEBHOOK_URL: "https://script.google.com/example", DIGEST_WEBHOOK_SECRET: "secret", DIGEST_TO_EMAIL: "owner@example.com" }),
+  );
+  assert.equal(response.status, 401);
+});
+
+test("reports when the digest last went out and when the next one is due", async () => {
+  const db = mockDb([auditRow()]);
+  // Sent two days ago on a 14-day schedule, so neither the "never sent" nor the
+  // "due now" wording applies and both timestamps have to render.
+  db.state.digest = { last_sent_at: Date.now() - 2 * DAY_MS, last_status: "sent" };
+  const env = envWith(db, { DIGEST_WEBHOOK_URL: "https://script.google.com/example", DIGEST_WEBHOOK_SECRET: "secret", DIGEST_TO_EMAIL: "owner@example.com", DIGEST_INTERVAL_DAYS: "14" });
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), env)).text();
+  assert.match(html, /Last sent /);
+  assert.match(html, /Next due /);
+  assert.doesNotMatch(html, /Invalid Date/, "a stored timestamp must render as a date");
 });

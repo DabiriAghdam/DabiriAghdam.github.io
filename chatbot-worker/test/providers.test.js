@@ -64,11 +64,22 @@ test("reports only the providers whose key is actually configured", () => {
   assert.deepEqual(activeProviders({ GROQ_API_KEY: "k" }).map((p) => p.name), ["groq"]);
   assert.deepEqual(
     activeProviders({ GROQ_API_KEY: "k", GEMINI_API_KEY: "k", OPENROUTER_API_KEY: "k" }).map((p) => p.name),
-    ["groq", "openrouter", "gemini"],
+    ["groq", "openrouter", "gemini", "gemini-31b", "gemini-flash"],
     "order is the fallback order, not the order the keys were added",
   );
   assert.deepEqual(activeProviders({}), []);
-  assert.deepEqual(activeProviders({ GEMINI_API_KEY: "k" }).map((p) => p.name), ["gemini"]);
+  // One Google key unlocks three entries, because Google meters its free tier per
+  // model rather than per key: the three Gemini rows have separate daily allowances
+  // even though they authenticate identically.
+  assert.deepEqual(
+    activeProviders({ GEMINI_API_KEY: "k" }).map((p) => p.name),
+    ["gemini", "gemini-31b", "gemini-flash"],
+  );
+  assert.deepEqual(
+    activeProviders({ GEMINI_API_KEY: "k" }).map((p) => p.model),
+    ["gemma-4-26b-a4b-it", "gemma-4-31b-it", "gemini-3.1-flash-lite"],
+    "each Gemini entry must request a different model, or they share one quota",
+  );
   // An empty-string secret is the shape wrangler leaves behind for an unset var.
   assert.deepEqual(activeProviders({ GROQ_API_KEY: "k", GEMINI_API_KEY: "" }).map((p) => p.name), ["groq"]);
 });
