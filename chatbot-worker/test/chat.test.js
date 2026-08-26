@@ -206,6 +206,12 @@ test("includes the publication-specific facts in the system prompt", async () =>
   assert.match(calls[1].messages[0].content, /Crime and Punishment/);
   assert.match(calls[1].messages[0].content, /graduate student representative/);
   assert.match(calls[1].messages[0].content, /ranked second among 120 students/);
+  // The social handles are the one part of the profile a visitor can trivially check,
+  // so a typo here is worse than an omission: it sends them to someone else's account.
+  assert.match(calls[1].messages[0].content, /github\.com\/DabiriAghdam/);
+  assert.match(calls[1].messages[0].content, /linkedin\.com\/in\/DabiriAghdam/);
+  assert.match(calls[1].messages[0].content, /x\.com\/DabiriAghdam/);
+  assert.match(calls[1].messages[0].content, /Google Scholar/);
 });
 
 test("returns the official ACL source for SOI Matters", async () => {

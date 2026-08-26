@@ -2,7 +2,7 @@
 layout: page
 permalink: /publications/
 title: Publications
-description: Peer-reviewed publications, preprints, and master's thesis by Amirhossein Dabiriaghdam.
+description: Amirhossein Dabiriaghdam's peer-reviewed publications and preprints.
 peer_reviewed_years: [2025, 2024, 2023]
 nav: true
 nav_order: 1
