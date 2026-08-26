@@ -11,6 +11,18 @@ const MAX_IMPORT_CHARS = 24_000_000;
 
 const STATUS_OPTIONS = ["accepted", "pending", "blocked-local", "blocked-guard", "blocked-provider", "guard-error", "model-error", "empty-response", "truncated"];
 const CONVERSATIONS_PER_PAGE = 10;
+const ADMIN_TIME_ZONE = "America/Vancouver";
+const ADMIN_TIME_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: ADMIN_TIME_ZONE,
+  year: "numeric",
+  month: "short",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+  timeZoneName: "short",
+});
 
 function securityHeaders(contentType, nonce = "") {
   const contentSecurityPolicy = [
@@ -44,7 +56,7 @@ function escapeHtml(value) {
 
 function formatTime(value) {
   const date = new Date(Number(value));
-  return Number.isNaN(date.getTime()) ? "Unknown" : date.toISOString().replace("T", " ").replace(".000Z", " UTC");
+  return Number.isNaN(date.getTime()) ? "Unknown" : ADMIN_TIME_FORMATTER.format(date);
 }
 
 function number(value) {
@@ -296,7 +308,7 @@ function renderAdmin({ messages, conversations, locations, stats, throttle, dige
   </style>
 </head>
 <body><main>
-  <header><div><div class="title-line"><h1>Chat logs</h1></div><p class="subtitle">Conversations and visitor activity for dabiriaghdam.github.io</p></div><div class="header-actions"><button id="theme-toggle" class="secondary" type="button" aria-label="Switch dashboard color theme">Light mode</button><a class="button secondary" href="/admin/export.json">Export JSON</a></div></header>
+  <header><div><div class="title-line"><h1>Chat logs</h1></div><p class="subtitle">Conversations and visitor activity for dabiriaghdam.github.io · Times shown in Vancouver</p></div><div class="header-actions"><button id="theme-toggle" class="secondary" type="button" aria-label="Switch dashboard color theme">Light mode</button><a class="button secondary" href="/admin/export.json">Export JSON</a></div></header>
   ${flashMarkup}
   <section class="stats" aria-label="Audit summary">
     <div class="stat"><strong>${number(stats.total_messages)}</strong><span>total messages</span></div>

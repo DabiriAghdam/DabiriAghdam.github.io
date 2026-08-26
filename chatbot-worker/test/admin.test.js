@@ -162,6 +162,7 @@ test("renders the full dashboard and bootstraps hashed credentials", async () =>
   const html = await response.text();
   assert.match(html, /Chat logs/);
   assert.match(html, /Conversations and visitor activity/);
+  assert.match(html, /Times shown in Vancouver/);
   assert.match(html, /<h2>Search<\/h2>/);
   assert.match(html, /id="theme-toggle"/);
   assert.match(html, /admin-theme/);
@@ -174,6 +175,13 @@ test("renders the full dashboard and bootstraps hashed credentials", async () =>
   assert.match(html, /I checked the profile context/);
   assert.doesNotMatch(db.state.credential.password_hash, /strong-password/);
   assert.match(response.headers.get("Content-Security-Policy"), /frame-ancestors 'none'/);
+});
+
+test("renders dashboard timestamps in Vancouver time", async () => {
+  const db = mockDb([auditRow({ created_at: Date.UTC(2026, 0, 15, 20, 30, 0) })]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /Jan 15, 2026, 12:30:00 PST/);
+  assert.doesNotMatch(html, /2026-01-15 20:30:00 UTC/);
 });
 
 test("does not render an empty map when the host supplies countries but no coordinates", async () => {
