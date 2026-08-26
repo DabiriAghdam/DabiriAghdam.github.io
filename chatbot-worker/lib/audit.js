@@ -48,7 +48,7 @@ export async function updateAuditStatus(db, id, status) {
 
 function normalizedFilters(filters = {}) {
   const roles = new Set(["user", "assistant"]);
-  const statuses = new Set(["accepted", "pending", "blocked-local", "blocked-guard", "guard-error", "model-error", "empty-response", "truncated"]);
+  const statuses = new Set(["accepted", "pending", "blocked-local", "blocked-guard", "blocked-provider", "guard-error", "model-error", "empty-response", "truncated"]);
   return {
     limit: Math.max(1, Math.min(5000, Number(filters.limit) || 500)),
     q: String(filters.q || "").trim().slice(0, 100),

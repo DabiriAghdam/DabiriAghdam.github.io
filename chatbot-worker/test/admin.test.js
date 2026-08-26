@@ -90,8 +90,8 @@ function request(path = "/admin", credentials, options = {}) {
   return new Request(`https://assistant.example${path}`, { ...options, headers });
 }
 
-function envWith(db) {
-  return { ADMIN_USERNAME: "amir", ADMIN_PASSWORD: "strong-password", DB: db };
+function envWith(db, extra = {}) {
+  return { ADMIN_USERNAME: "amir", ADMIN_PASSWORD: "strong-password", DB: db, ...extra };
 }
 
 test("requires authentication for the audit dashboard", async () => {
@@ -305,4 +305,39 @@ test("warns when the provider's daily budget is exhausted", async () => {
   assert.match(html, /Assistant is being throttled/);
   assert.match(html, /daily budget ran out/);
   assert.match(html, /by the model provider/);
+});
+
+test("labels each answer with the provider and model that served it", async () => {
+  const db = mockDb([
+    auditRow({ id: 1, role: "user", content: "What does Amir research?", model: "groq:openai/gpt-oss-20b" }),
+    auditRow({ id: 2, role: "assistant", content: "LLM agents.", model: "openrouter:cohere/north-mini-code:free" }),
+  ]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /openrouter · cohere\/north-mini-code:free/);
+  // The user row's model is only the provider we meant to try first, so showing it
+  // there would claim an answer came from somewhere it never went.
+  assert.doesNotMatch(html, /groq · openai\/gpt-oss-20b/);
+});
+
+test("still labels answers recorded before the fallback chain existed", async () => {
+  const db = mockDb([auditRow({ role: "assistant", content: "LLM agents.", model: "openai/gpt-oss-20b" })]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db))).text();
+  assert.match(html, /class="model-badge"[^>]*>openai\/gpt-oss-20b</);
+});
+
+test("does not credit fallback providers that have no key configured", async () => {
+  const today = Math.floor(Date.now() / DAY_MS);
+  const db = mockDb([auditRow()], [{ day_window: today, kind: "upstream-exhausted", count: 30 }]);
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), envWith(db, { GROQ_API_KEY: "k" }))).text();
+  assert.match(html, /Assistant is being throttled/);
+  assert.match(html, /No fallback provider is configured/);
+  assert.doesNotMatch(html, /already tried/);
+});
+
+test("names the fallback providers that are actually configured", async () => {
+  const today = Math.floor(Date.now() / DAY_MS);
+  const db = mockDb([auditRow()], [{ day_window: today, kind: "upstream-exhausted", count: 30 }]);
+  const env = envWith(db, { GROQ_API_KEY: "k", OPENROUTER_API_KEY: "k", GEMINI_API_KEY: "k" });
+  const html = await (await handleAdminRequest(request("/admin", "amir:strong-password"), env)).text();
+  assert.match(html, /openrouter and gemini are already tried/);
 });

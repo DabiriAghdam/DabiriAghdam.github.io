@@ -2,6 +2,7 @@ import { resetAuditForTests, updateAuditStatus, writeAuditMessage } from "./audi
 import { enforceRateLimit, resetRateLimitsForTests as resetRateLimitState, VISITOR_MINUTE_LIMIT } from "./rate-limit.js";
 import { buildSystemPrompt } from "./context/index.js";
 import { recordThrottle } from "./throttle.js";
+import { activeProviders, callChatProvider, createThoughtFilter, providerLabel } from "./providers.js";
 
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_MODEL = "openai/gpt-oss-20b";
@@ -88,7 +89,7 @@ function serverEvent(event, payload) {
   return `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-function processGroqEventLine(line, onDelta, onReasoning, onFinish) {
+function processProviderEventLine(line, onDelta, onReasoning, onFinish, onModel) {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith(":")) return false;
   if (!trimmed.startsWith("data:")) return false;
@@ -97,6 +98,7 @@ function processGroqEventLine(line, onDelta, onReasoning, onFinish) {
   if (payload === "[DONE]") return true;
   try {
     const parsed = JSON.parse(payload);
+    if (typeof parsed.model === "string" && parsed.model) onModel(parsed.model);
     const choice = parsed.choices?.[0];
     if (typeof choice?.finish_reason === "string") onFinish(choice.finish_reason);
     const delta = choice?.delta?.content;
@@ -109,9 +111,11 @@ function processGroqEventLine(line, onDelta, onReasoning, onFinish) {
   return false;
 }
 
-function streamGroqResponse(groqResponse, {
+function streamProviderResponse(providerResponse, {
   headers,
   env,
+  provider,
+  release,
   userAuditId,
   auditEntry,
   question,
@@ -125,10 +129,15 @@ function streamGroqResponse(groqResponse, {
   let buffer = "";
   let completed = false;
   let finishReason = null;
+  // Gemma emits its chain-of-thought inline in the content channel; every other
+  // provider separates it, and for those the filter is a pass-through.
+  const thoughts = createThoughtFilter();
+  let servedModel = provider.model;
 
   const body = new ReadableStream({
     async start(controller) {
       const emitError = async (message, status = 502) => {
+        release?.();
         try {
           await updateAuditStatus(env.DB, userAuditId, "model-error");
         } catch (error) {
@@ -138,8 +147,49 @@ function streamGroqResponse(groqResponse, {
         controller.close();
       };
 
+      // Hoisted so the stall path below can reach it: a truncated answer the visitor
+      // has already read must still be recorded, or the dashboard shows a question
+      // with no reply and the turn looks like a failure that never happened.
+      const persistAssistantAudit = async (message, truncated) => {
+        try {
+          await writeAuditMessage(env.DB, {
+            ...auditEntry,
+            model: providerLabel(provider.name, servedModel),
+            role: "assistant",
+            content: message,
+            reasoning: fullReasoning.trim() || null,
+            status: truncated ? "truncated" : "accepted",
+            createdAt: Date.now(),
+          });
+        } catch (error) {
+          // Do not discard a completed answer just because audit storage is unavailable.
+          console.error("Assistant audit storage unavailable", error);
+        }
+      };
+      const settleAudit = async (message, truncated) => {
+        settled = true;
+        const pending = persistAssistantAudit(message, truncated);
+        if (ctx?.waitUntil) ctx.waitUntil(pending);
+        else await pending;
+      };
+
+      // The terminal event and the audit write must happen exactly once. Without this
+      // a controller.close() that throws — a visitor who navigated away mid-answer —
+      // would fall into the catch below and replay the whole ending on a dead stream.
+      let settled = false;
+
+      const onDelta = (delta) => {
+        const visible = thoughts.push(delta);
+        if (!visible) return;
+        fullMessage += visible;
+        controller.enqueue(encoder.encode(serverEvent("delta", { text: visible })));
+      };
+      const onReasoning = (reasoning) => { fullReasoning += reasoning; };
+      const onFinish = (reason) => { finishReason = reason; };
+      const onModel = (name) => { servedModel = name; };
+
       try {
-        reader = groqResponse.body?.getReader();
+        reader = providerResponse.body?.getReader();
         if (!reader) {
           await emitError("The assistant returned an empty response.");
           return;
@@ -151,14 +201,7 @@ function streamGroqResponse(groqResponse, {
           const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() || "";
           for (const line of lines) {
-            if (processGroqEventLine(line, (delta) => {
-              fullMessage += delta;
-              controller.enqueue(encoder.encode(serverEvent("delta", { text: delta })));
-            }, (reasoning) => {
-              fullReasoning += reasoning;
-            }, (reason) => {
-              finishReason = reason;
-            })) {
+            if (processProviderEventLine(line, onDelta, onReasoning, onFinish, onModel)) {
               completed = true;
               break;
             }
@@ -167,15 +210,17 @@ function streamGroqResponse(groqResponse, {
         }
 
         if (!completed && buffer) {
-          processGroqEventLine(buffer, (delta) => {
-            fullMessage += delta;
-            controller.enqueue(encoder.encode(serverEvent("delta", { text: delta })));
-          }, (reasoning) => {
-            fullReasoning += reasoning;
-          }, (reason) => {
-            finishReason = reason;
-          });
+          processProviderEventLine(buffer, onDelta, onReasoning, onFinish, onModel);
         }
+
+        const trailing = thoughts.flush();
+        if (trailing) {
+          fullMessage += trailing;
+          controller.enqueue(encoder.encode(serverEvent("delta", { text: trailing })));
+        }
+        fullReasoning += thoughts.reasoning();
+
+        release?.();
 
         const message = fullMessage.trim();
         if (!message) {
@@ -186,39 +231,41 @@ function streamGroqResponse(groqResponse, {
         }
 
         const truncated = finishReason === "length";
-        const persistAssistantAudit = async () => {
-          try {
-            await writeAuditMessage(env.DB, {
-              ...auditEntry,
-              role: "assistant",
-              content: message,
-              reasoning: fullReasoning.trim() || null,
-              status: truncated ? "truncated" : "accepted",
-              createdAt: Date.now(),
-            });
-          } catch (error) {
-            // Do not discard a completed answer just because audit storage is unavailable.
-            console.error("Assistant audit storage unavailable", error);
-          }
-        };
         const terminalEvent = encoder.encode(serverEvent("done", {
           followUpQuestions: suggestFollowUps(question, message),
           sources: sourceLinks(question, message),
           truncated,
         }));
+        settled = true;
         controller.enqueue(terminalEvent);
         controller.close();
-        if (ctx?.waitUntil) {
-          ctx.waitUntil(persistAssistantAudit());
-        } else {
-          await persistAssistantAudit();
-        }
+        await settleAudit(message, truncated);
       } catch (error) {
-        console.error("Groq stream failed", error);
+        console.error("Provider stream failed", error);
+        if (settled) return;
+        // A stall abort after the answer already started is not worth discarding: the
+        // visitor has the text on screen, so close the turn as truncated instead of
+        // replacing a partial answer with an error.
+        const partial = `${fullMessage}${thoughts.flush()}`.trim();
+        // Same order as the normal path: the filter's reasoning is only complete once
+        // flush() has run, and without this the stored turn loses it.
+        fullReasoning += thoughts.reasoning();
+        if (partial) {
+          release?.();
+          controller.enqueue(encoder.encode(serverEvent("done", {
+            followUpQuestions: suggestFollowUps(question, partial),
+            sources: sourceLinks(question, partial),
+            truncated: true,
+          })));
+          controller.close();
+          await settleAudit(partial, true);
+          return;
+        }
         await emitError("The assistant is temporarily unavailable.");
       }
     },
     async cancel(reason) {
+      release?.();
       try {
         await reader?.cancel(reason);
       } catch {
@@ -420,7 +467,9 @@ export async function handleChatRequest(request, env, ctx) {
   headers.set("RateLimit-Limit", String(VISITOR_MINUTE_LIMIT));
   headers.set("RateLimit-Remaining", String(rateLimit.remainingMinute));
 
-  const model = env.MODEL || DEFAULT_MODEL;
+  // Provisional: the user row is written before the provider is chosen, so it records
+  // the provider we intend to try first. The assistant row records who actually answered.
+  const model = providerLabel(activeProviders(env)[0]?.name || "groq", env.MODEL || DEFAULT_MODEL);
   let userAuditId;
   try {
     userAuditId = await writeAuditMessage(env.DB, {
@@ -445,6 +494,7 @@ export async function handleChatRequest(request, env, ctx) {
     return json({ error: rejectedInput }, 400, headers);
   }
 
+  let guardSkipped = false;
   if (!isSafeStarterQuestion(latestMessage)) {
     try {
       if (await promptGuardRejects(latestMessage, env.GROQ_API_KEY)) {
@@ -452,53 +502,45 @@ export async function handleChatRequest(request, env, ctx) {
         return json({ error: SAFETY_REJECTION }, 400, headers);
       }
     } catch (error) {
-      console.error("Prompt Guard unavailable", error);
+      // Fail open. Prompt Guard runs on Groq, so a Groq outage would otherwise stop
+      // the request here and the fallback chain below would never be reached — the
+      // outage the chain exists to survive would be the one thing that defeats it.
+      // The local BLOCKED_INPUT_PATTERNS check above has already run and still
+      // applies, and the turn is recorded as "guard-error" so the dashboard shows
+      // exactly which answers went out without the model-based check.
+      console.error("Prompt Guard unavailable, proceeding without it", error);
+      guardSkipped = true;
       await updateAuditStatus(env.DB, userAuditId, "guard-error");
-      return json({ error: "The assistant's safety check is temporarily unavailable." }, 503, headers);
     }
   }
 
-  await updateAuditStatus(env.DB, userAuditId, "accepted");
+  if (!guardSkipped) await updateAuditStatus(env.DB, userAuditId, "accepted");
 
-  let groqResponse;
-  try {
-    groqResponse = await fetch(GROQ_CHAT_URL, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "system", content: buildSystemPrompt() }, ...messages],
-        max_completion_tokens: MAX_COMPLETION_TOKENS,
-        temperature: 0.3,
-        reasoning_effort: "low",
-        include_reasoning: true,
-        stream: wantsStream,
-      }),
-      signal: AbortSignal.timeout(wantsStream ? 60_000 : 15_000),
-    });
-  } catch (error) {
-    console.error("Groq request failed", error);
-    await updateAuditStatus(env.DB, userAuditId, "model-error");
-    return json({ error: "The assistant is temporarily unavailable." }, 502, headers);
-  }
+  const attempt = await callChatProvider(env, {
+    messages,
+    systemPrompt: buildSystemPrompt(),
+    wantsStream,
+    maxCompletionTokens: MAX_COMPLETION_TOKENS,
+  });
 
-  if (!groqResponse.ok) {
-    const retryAfter = Number(groqResponse.headers.get("Retry-After"));
-    console.error("Groq API error", groqResponse.status, await groqResponse.text());
+  if (!attempt.ok) {
+    // A moderation refusal is a judgement on the prompt, not on the provider, so the
+    // chain has already stopped rather than shopping the same flagged text around.
+    if (attempt.contentRejected) {
+      await updateAuditStatus(env.DB, userAuditId, "blocked-provider");
+      return json({ error: SAFETY_REJECTION }, 400, headers);
+    }
     await updateAuditStatus(env.DB, userAuditId, "model-error");
-    if (groqResponse.status !== 429) {
+    if (attempt.status !== 429) {
       return json({ error: "The assistant is temporarily unavailable." }, 502, headers);
     }
     // A burst against the per-minute token ceiling clears in seconds; an exhausted
     // daily budget does not, and telling someone to "wait a moment" for something
     // that returns tomorrow just earns a string of failed retries.
-    const waitsHours = Number.isFinite(retryAfter) && retryAfter > 900;
+    const waitsHours = Number.isFinite(attempt.retryAfter) && attempt.retryAfter > 900;
     await recordThrottle(env.DB, waitsHours ? "upstream-exhausted" : "upstream-busy");
-    if (Number.isFinite(retryAfter) && retryAfter > 0) {
-      headers.set("Retry-After", String(Math.ceil(retryAfter)));
+    if (Number.isFinite(attempt.retryAfter) && attempt.retryAfter > 0) {
+      headers.set("Retry-After", String(Math.ceil(attempt.retryAfter)));
     }
     return json({
       error: waitsHours
@@ -507,10 +549,14 @@ export async function handleChatRequest(request, env, ctx) {
     }, 429, headers);
   }
 
+  const { response: providerResponse, provider, release } = attempt;
+
   if (wantsStream) {
-    return streamGroqResponse(groqResponse, {
+    return streamProviderResponse(providerResponse, {
       headers,
       env,
+      provider,
+      release,
       userAuditId,
       auditEntry: {
         sessionId,
@@ -524,14 +570,28 @@ export async function handleChatRequest(request, env, ctx) {
     });
   }
 
-  const result = await groqResponse.json();
+  let result;
+  try {
+    result = await providerResponse.json();
+  } catch (error) {
+    // Aborted by the shared deadline, or truncated mid-body.
+    console.error("Provider response was unreadable", error);
+    await updateAuditStatus(env.DB, userAuditId, "model-error");
+    return json({ error: "The assistant is temporarily unavailable." }, 502, headers);
+  } finally {
+    release();
+  }
   const assistantMessage = result.choices?.[0]?.message || {};
-  const message = assistantMessage.content;
-  const reasoning = typeof assistantMessage.reasoning === "string"
-    ? assistantMessage.reasoning.trim()
+  const thoughts = createThoughtFilter();
+  const message = typeof assistantMessage.content === "string"
+    ? thoughts.push(assistantMessage.content) + thoughts.flush()
+    : assistantMessage.content;
+  const separateReasoning = typeof assistantMessage.reasoning === "string"
+    ? assistantMessage.reasoning
     : typeof assistantMessage.reasoning_content === "string"
-      ? assistantMessage.reasoning_content.trim()
+      ? assistantMessage.reasoning_content
       : "";
+  const reasoning = `${separateReasoning}${thoughts.reasoning()}`.trim();
   if (typeof message !== "string" || !message.trim()) {
     await updateAuditStatus(env.DB, userAuditId, "empty-response");
     return json({ error: "The assistant returned an empty response." }, 502, headers);
@@ -545,7 +605,7 @@ export async function handleChatRequest(request, env, ctx) {
     reasoning: reasoning || null,
     status: truncated ? "truncated" : "accepted",
     origin,
-    model,
+    model: providerLabel(provider.name, typeof result.model === "string" && result.model ? result.model : provider.model),
     ...location,
     createdAt: Date.now(),
   });

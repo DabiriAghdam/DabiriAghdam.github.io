@@ -1,9 +1,10 @@
 import { adminAuthConfig, changeAdminPassword, parseBasicAuth, verifyAdminCredentials } from "./admin-auth.js";
 import { getThrottleStats } from "./throttle.js";
+import { activeProviders } from "./providers.js";
 import { auditConfig, countAuditMessages, deleteAuditOlderThan90Days, getAuditLocations, getAuditStats, listAuditConversationPage, listAuditMessages } from "./audit.js";
 import { checkAdminLoginRateLimit, enforceAdminLoginRateLimit } from "./rate-limit.js";
 
-const STATUS_OPTIONS = ["accepted", "pending", "blocked-local", "blocked-guard", "guard-error", "model-error", "empty-response", "truncated"];
+const STATUS_OPTIONS = ["accepted", "pending", "blocked-local", "blocked-guard", "blocked-provider", "guard-error", "model-error", "empty-response", "truncated"];
 const CONVERSATIONS_PER_PAGE = 10;
 
 function securityHeaders(contentType, nonce = "") {
@@ -125,13 +126,26 @@ function renderLocations(locations) {
   </section>`;
 }
 
+// Assistant rows record who actually answered as "provider:model"; the fallback chain
+// means that is not always the primary. Rows written before the chain existed hold a
+// bare model id, and rows for user messages hold only the provider we meant to try,
+// so the badge is shown for assistant turns alone.
+function modelBadge(row) {
+  if (row.role !== "assistant" || !row.model) return "";
+  const separator = row.model.indexOf(":");
+  const provider = separator > 0 ? row.model.slice(0, separator) : "";
+  const model = separator > 0 ? row.model.slice(separator + 1) : row.model;
+  const label = provider ? `${provider} · ${model}` : model;
+  return `<span class="model-badge" title="Served by ${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+}
+
 function renderConversations(conversations) {
   if (!conversations.length) return '<div class="empty"><strong>No conversations found</strong><span>Try clearing the filters or wait for new chats.</span></div>';
   return conversations.map(({ sessionId, rows, latest }) => {
     const first = rows[0];
     const bubbles = rows.map((row) => `
       <div class="message-row ${escapeHtml(row.role)}">
-        <div class="message-meta"><span>${escapeHtml(row.role)}</span><time>${escapeHtml(formatTime(row.created_at))}</time><span class="status status-${escapeHtml(row.status)}">${escapeHtml(row.status)}</span></div>
+        <div class="message-meta"><span>${escapeHtml(row.role)}</span><time>${escapeHtml(formatTime(row.created_at))}</time><span class="status status-${escapeHtml(row.status)}">${escapeHtml(row.status)}</span>${modelBadge(row)}</div>
         <div class="bubble">${escapeHtml(row.content)}</div>
         ${row.reasoning ? `<details class="reasoning"><summary>Model reasoning</summary><div class="reasoning-content">${escapeHtml(row.reasoning)}</div></details>` : ""}
       </div>`).join("");
@@ -172,7 +186,7 @@ function renderPagination(filters, pagination) {
 // day is fine, while the same number on a quiet day means the assistant is broken
 // for most visitors. An exhausted upstream budget is always called out, because at
 // that point the assistant is down until the quota resets rather than merely slow.
-function renderThrottleNotice(throttle, stats) {
+function renderThrottleNotice(throttle, stats, providers = []) {
   if (!throttle || throttle.today === 0) return "";
   const delivered = Number(stats?.delivered_24h || 0);
   const attempted = delivered + throttle.today;
@@ -187,10 +201,16 @@ function renderThrottleNotice(throttle, stats) {
   const lead = exhausted
     ? "The model provider's daily budget ran out today, so the assistant stopped answering until the quota resets."
     : `About ${share}% of attempted questions were turned away today.`;
-  return `<div class="flash error" role="status"><strong>Assistant is being throttled.</strong> ${escapeHtml(lead)} ${number(throttle.today)} request${throttle.today === 1 ? "" : "s"} rejected in the last day${escapeHtml(detail)}, ${number(throttle.week)} in the last 7 days. Consider raising the caps, trimming the prompt further, or adding a fallback provider.</div>`;
+  // Never claim a fallback was tried that has no key configured: that would send the
+  // reader looking for a bug in the chain when the fix is to add the missing secret.
+  const fallbacks = providers.slice(1);
+  const advice = fallbacks.length
+    ? `${fallbacks.join(" and ")} ${fallbacks.length === 1 ? "is" : "are"} already tried before a visitor sees this, so consider raising the caps or trimming the prompt further.`
+    : `No fallback provider is configured, so ${providers[0] || "the primary provider"} running out means the assistant stops answering. Adding a GEMINI_API_KEY or OPENROUTER_API_KEY secret would cover this.`;
+  return `<div class="flash error" role="status"><strong>Assistant is being throttled.</strong> ${escapeHtml(lead)} ${number(throttle.today)} request${throttle.today === 1 ? "" : "s"} rejected in the last day${escapeHtml(detail)}, ${number(throttle.week)} in the last 7 days. ${escapeHtml(advice)}</div>`;
 }
 
-function renderAdmin({ messages, conversations, locations, stats, throttle, filters, pagination, username, flash, nonce }) {
+function renderAdmin({ messages, conversations, locations, stats, throttle, providers, filters, pagination, username, flash, nonce }) {
   const sessionsShown = conversations.length;
   const statusOptions = STATUS_OPTIONS.map((status) => `<option value="${status}"${selected(filters.status, status)}>${status}</option>`).join("");
   const flashMarkup = flash ? `<div class="flash ${escapeHtml(flash.type)}" role="status">${escapeHtml(flash.message)}</div>` : "";
@@ -212,7 +232,7 @@ function renderAdmin({ messages, conversations, locations, stats, throttle, filt
     .flash{border:1px solid;border-radius:10px;margin-bottom:18px;padding:12px 14px;font-size:14px}.flash.success{background:var(--success-soft);border-color:#abefc6;color:var(--success)}.flash.error{background:var(--danger-soft);border-color:#fecdca;color:var(--danger)}
     .panel{padding:18px;margin-bottom:18px}.panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:15px}.panel h2{font-size:16px;margin:0 0 4px}.panel p{color:var(--muted);font-size:13px;line-height:1.5;margin:0}.filters{display:grid;grid-template-columns:minmax(220px,1fr) 150px 175px auto auto;gap:10px;align-items:end}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:12px;font-weight:700;color:var(--muted)}input,select{width:100%;min-height:41px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--text);font:inherit;font-size:14px;padding:9px 11px}
     .results-bar{display:flex;justify-content:space-between;gap:12px;align-items:center;margin:22px 0 10px}.results-bar h2{font-size:17px;margin:0}.results-bar span{color:var(--muted);font-size:13px}.conversation{margin-bottom:10px;overflow:hidden}.pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin:18px 0 28px}.pagination-button{padding:8px 11px;font-size:12px}.pagination-button.is-disabled{cursor:not-allowed;opacity:.45}.pagination-label{color:var(--muted);font-size:12px;font-weight:650;min-width:82px;text-align:center}details>summary{cursor:pointer;display:flex;justify-content:space-between;gap:16px;list-style:none;padding:14px 16px}summary::-webkit-details-marker{display:none}summary>span{display:flex;flex-direction:column;gap:3px}summary strong{font-size:13px}summary small{color:var(--muted);font-size:11px}.session-meta{text-align:right}.session-meta code{font-size:11px;color:var(--accent)}
-    .thread{border-top:1px solid var(--line);background:var(--panel-2);padding:18px}.message-row{max-width:78%;margin-bottom:15px}.message-row:last-child{margin-bottom:0}.message-row.user{margin-left:auto}.message-meta{display:flex;gap:8px;align-items:center;margin:0 4px 5px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.message-row.user .message-meta{justify-content:flex-end}.bubble{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55}.message-row.user .bubble{background:var(--accent);border-color:var(--accent);color:#fff}.reasoning{margin-top:7px;color:var(--muted);font-size:11px}.reasoning summary{cursor:pointer;display:inline-block;padding:3px 0}.reasoning-content{max-height:280px;overflow:auto;margin-top:5px;padding:8px 10px;border-left:2px solid var(--line);background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5}.status{border-radius:99px;background:var(--panel);padding:2px 5px}.status-blocked-local,.status-blocked-guard,.status-model-error,.status-guard-error{color:var(--danger)}
+    .thread{border-top:1px solid var(--line);background:var(--panel-2);padding:18px}.message-row{max-width:78%;margin-bottom:15px}.message-row:last-child{margin-bottom:0}.message-row.user{margin-left:auto}.message-meta{display:flex;gap:8px;align-items:center;margin:0 4px 5px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em}.message-row.user .message-meta{justify-content:flex-end}.bubble{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.55}.message-row.user .bubble{background:var(--accent);border-color:var(--accent);color:#fff}.reasoning{margin-top:7px;color:var(--muted);font-size:11px}.reasoning summary{cursor:pointer;display:inline-block;padding:3px 0}.reasoning-content{max-height:280px;overflow:auto;margin-top:5px;padding:8px 10px;border-left:2px solid var(--line);background:var(--panel);white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;line-height:1.5}.status{border-radius:99px;background:var(--panel);padding:2px 5px}.model-badge{border-radius:99px;border:1px solid var(--line);padding:2px 6px;color:var(--muted);text-transform:none;letter-spacing:0;font-size:10px;overflow-wrap:anywhere}.status-blocked-local,.status-blocked-guard,.status-blocked-provider,.status-model-error,.status-guard-error{color:var(--danger)}
     .geo-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:18px;margin-bottom:18px}.geo-panel{min-height:300px}.geo-wide{grid-column:1/-1}.geo-map{position:relative;min-height:220px;overflow:hidden;border:1px solid var(--line);border-radius:12px;background-color:var(--panel-2);background-image:linear-gradient(to right,color-mix(in srgb,var(--line) 70%,transparent) 1px,transparent 1px),linear-gradient(to bottom,color-mix(in srgb,var(--line) 70%,transparent) 1px,transparent 1px);background-size:10% 100%,100% 20%}.geo-map:before{content:"";position:absolute;inset:14% 5%;border-radius:48% 42% 50% 40%;background:color-mix(in srgb,var(--accent) 9%,transparent);clip-path:polygon(3% 21%,15% 11%,22% 20%,29% 15%,37% 28%,46% 17%,55% 26%,67% 17%,77% 30%,90% 24%,98% 44%,92% 58%,81% 54%,73% 70%,62% 62%,53% 79%,43% 69%,34% 83%,25% 67%,16% 75%,7% 57%)}.geo-dot{position:absolute;z-index:1;width:10px;height:10px;border:2px solid var(--panel);border-radius:50%;background:var(--accent);box-shadow:0 1px 5px color-mix(in srgb,var(--accent) 60%,transparent);transform:translate(-50%,-50%)}.geo-legend{display:flex;justify-content:space-between;gap:12px;margin-top:9px;color:var(--muted);font-size:11px}.geo-legend .geo-dot{position:static;display:inline-block;width:9px;height:9px;transform:none;margin-right:4px}.map-empty,.location-empty{color:var(--muted);font-size:13px}.map-empty{position:absolute;inset:0;display:grid;place-items:center}.country-list{display:grid;gap:14px}.country-row{display:grid;gap:7px}.country-row>div:first-child{display:flex;justify-content:space-between;gap:8px;font-size:13px}.country-row span{color:var(--muted);font-size:11px}.country-track{height:7px;overflow:hidden;border-radius:99px;background:var(--panel-2)}.country-track i{display:block;height:100%;border-radius:inherit;background:var(--accent)}.location-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px}.location-table{width:100%;border-collapse:collapse;font-size:12px}.location-table th,.location-table td{padding:10px 11px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}.location-table th{background:var(--panel-2);color:var(--muted);font-size:10px;letter-spacing:.05em;text-transform:uppercase}.location-table tr:last-child td{border-bottom:0}
     .empty{align-items:center;background:var(--panel);border:1px dashed var(--line);border-radius:13px;color:var(--muted);display:flex;flex-direction:column;gap:5px;padding:54px 20px}.empty strong{color:var(--text)}.settings{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:28px}.settings .panel{margin:0}.stack{display:grid;gap:11px;margin-top:15px}.inline-check{display:flex;align-items:flex-start;gap:9px;color:var(--muted);font-size:12px;line-height:1.45}.inline-check input{width:16px;min-height:16px;margin-top:1px}.danger-panel{border-color:#fecdca}.danger-panel h2{color:var(--danger)}.footnote{margin-top:22px;color:var(--muted);font-size:11px;text-align:center}
     .geo-map:before{display:none}.geo-map{position:relative;width:100%;height:280px;min-height:0;overflow:hidden;background:var(--panel-2)}.geo-map .leaflet-container{width:100%;height:100%;position:relative;overflow:hidden;background:var(--panel-2);font:inherit}.geo-map .leaflet-pane,.geo-map .leaflet-tile,.geo-map .leaflet-marker-icon,.geo-map .leaflet-marker-shadow,.geo-map .leaflet-tile-container,.geo-map .leaflet-pane>svg,.geo-map .leaflet-pane>canvas,.geo-map .leaflet-zoom-box,.geo-map .leaflet-image-layer,.geo-map .leaflet-layer{position:absolute;left:0;top:0}.geo-map .leaflet-tile{max-width:none;visibility:hidden}.geo-map .leaflet-tile-loaded{visibility:inherit}.geo-map .leaflet-tile-container{pointer-events:none}.geo-map .leaflet-marker-icon,.geo-map .leaflet-marker-shadow{display:block}.geo-map .leaflet-control{position:relative;z-index:800;pointer-events:auto}.geo-map .leaflet-top,.geo-map .leaflet-bottom{position:absolute;z-index:1000;pointer-events:none}.geo-map .leaflet-top{top:0}.geo-map .leaflet-bottom{bottom:0}.geo-map .leaflet-left{left:0}.geo-map .leaflet-right{right:0}.geo-map .leaflet-control-attribution{font-size:10px}.geo-map--empty{display:grid;place-items:center}.geo-dot{position:static;display:inline-block;width:9px;height:9px;transform:none;margin-right:4px}
@@ -230,7 +250,7 @@ function renderAdmin({ messages, conversations, locations, stats, throttle, filt
     .panel,.conversation{border-radius:7px;box-shadow:none}.panel{padding:16px;margin-bottom:16px}.panel-head{margin-bottom:12px}.panel h2,.results-bar h2{font-family:Georgia,"Times New Roman",serif;font-size:18px;font-weight:500;letter-spacing:-.01em}.panel p{font-size:12px}.flash{border-radius:5px;padding:10px 12px}
     .geo-grid{grid-template-columns:minmax(0,1.45fr) minmax(280px,.55fr);gap:16px;margin-bottom:16px}.geo-panel{min-height:0}.geo-map{height:248px;border-radius:4px}.geo-legend{font-size:10px}.country-list{gap:12px}.country-row>div:first-child{font-size:12px}.country-track{height:3px;border-radius:0}.country-track i{border-radius:0}.geo-wide{grid-column:1/-1}.location-table-wrap{border-radius:4px}.location-table th,.location-table td{padding:9px 10px}.location-table th{font-size:9px;background:var(--panel-2)}
     .filters{grid-template-columns:minmax(240px,1fr) 140px 165px auto auto}.field{gap:5px}.field label{font-size:10px;letter-spacing:.05em;text-transform:uppercase}input,select{min-height:36px;border-radius:4px;font-size:13px;padding:7px 9px}
-    .results-bar{margin:28px 0 9px;padding-bottom:8px;border-bottom:1px solid var(--line)}.results-bar span{font-size:11px}.conversation{margin:0;border-width:0 0 1px;border-radius:0;background:transparent}.conversation:first-of-type{border-top:1px solid var(--line)}details>summary{padding:12px 4px}details>summary:before{content:"+";flex:0 0 15px;color:var(--muted);font:16px/1 monospace}details[open]>summary:before{content:"−"}summary>span:first-of-type{flex:1}summary strong{font-size:12px;font-weight:650}summary small{font-size:10px}.session-meta{min-width:260px}.session-meta code{color:var(--text);font-size:10px}.thread{border:1px solid var(--line);border-bottom:0;background:var(--panel);padding:16px}.message-row{max-width:82%}.bubble{border-radius:5px;font-size:12px}.message-row.user .bubble{background:var(--accent-soft);border-color:#c9dbe5;color:var(--text)}.status{border-radius:3px;padding:1px 4px}
+    .results-bar{margin:28px 0 9px;padding-bottom:8px;border-bottom:1px solid var(--line)}.results-bar span{font-size:11px}.conversation{margin:0;border-width:0 0 1px;border-radius:0;background:transparent}.conversation:first-of-type{border-top:1px solid var(--line)}details>summary{padding:12px 4px}details>summary:before{content:"+";flex:0 0 15px;color:var(--muted);font:16px/1 monospace}details[open]>summary:before{content:"−"}summary>span:first-of-type{flex:1}summary strong{font-size:12px;font-weight:650}summary small{font-size:10px}.session-meta{min-width:260px}.session-meta code{color:var(--text);font-size:10px}.thread{border:1px solid var(--line);border-bottom:0;background:var(--panel);padding:16px}.message-row{max-width:82%}.bubble{border-radius:5px;font-size:12px}.message-row.user .bubble{background:var(--accent-soft);border-color:#c9dbe5;color:var(--text)}.status{border-radius:3px;padding:1px 4px}.model-badge{border-radius:3px;padding:1px 4px}
     .pagination{margin:18px 0 34px}.settings{padding-top:22px;border-top:1px solid var(--line);gap:16px}.settings .panel{background:transparent}.danger-panel{border-color:#dfc8c4}.footnote{text-align:left;border-top:1px solid var(--line);padding-top:14px}.empty{border-radius:5px;padding:42px 20px}
     @media(max-width:900px){.stats{grid-template-columns:repeat(3,1fr)}.stat:nth-child(3){border-right:0}.stat:nth-child(-n+3){border-bottom:1px solid var(--line)}.geo-grid{grid-template-columns:1fr}.geo-wide{grid-column:auto}.session-meta{min-width:0}}
     @media(max-width:560px){main{padding:24px 14px 44px}header{align-items:flex-start}.stats{grid-template-columns:repeat(2,1fr)}.stat:nth-child(3){border-right:1px solid var(--line)}.stat:nth-child(even){border-right:0}.stat:nth-child(-n+4){border-bottom:1px solid var(--line)}.filters{grid-template-columns:1fr}.geo-map{height:220px}.session-meta{text-align:left}.settings .panel{padding:14px 0;border-left:0;border-right:0}}
@@ -255,7 +275,7 @@ function renderAdmin({ messages, conversations, locations, stats, throttle, filt
     <div class="stat${throttle && throttle.today > 0 ? " warn" : ""}"><strong>${number(throttle ? throttle.today : 0)}</strong><span>turned away (24h)</span></div>
     <div class="stat warn"><strong>${number(stats.older_than_90)}</strong><span>older than 90 days</span></div>
   </section>
-  ${renderThrottleNotice(throttle, stats)}
+  ${renderThrottleNotice(throttle, stats, providers)}
   ${renderLocations(locations)}
   <section class="panel">
     <div class="panel-head"><div><h2>Search</h2><p>Search message text or a session ID, then narrow by role or processing status.</p></div></div>
@@ -373,7 +393,7 @@ async function dashboardResponse(request, env, username, flash) {
     end: Math.min(page * CONVERSATIONS_PER_PAGE, totalConversations),
   };
   const nonce = crypto.randomUUID().replaceAll("-", "");
-  return new Response(request.method === "HEAD" ? null : renderAdmin({ messages, conversations, locations, stats, throttle, filters, pagination, username, flash, nonce }), {
+  return new Response(request.method === "HEAD" ? null : renderAdmin({ messages, conversations, locations, stats, throttle, providers: activeProviders(env).map((provider) => provider.name), filters, pagination, username, flash, nonce }), {
     headers: securityHeaders("text/html; charset=utf-8", nonce),
   });
 }
