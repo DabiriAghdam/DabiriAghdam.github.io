@@ -1,19 +1,25 @@
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
-// Sized against the Groq free tier for openai/gpt-oss-20b, where tokens bind long
-// before requests do: 8K tokens/minute and 200K tokens/day. A turn costs roughly
-// 3K tokens (a ~2K-token system prompt, resent every turn, plus history and up to
-// 800 completion tokens), so the day caps are what protect the 200K budget.
+// Sized against the whole provider chain, not against Groq alone.
 //
-// The per-minute cap is deliberately NOT squeezed down to the ~2 turns/minute the
-// token ceiling implies. It governs burst behaviour, not the daily budget, and the
-// panel offers follow-up suggestion chips: at 3/minute, clicking two of them in a
-// row hits a hard error and the assistant looks broken. Groq's own 429 is the
-// backstop for a genuine token burst, and it now returns a friendly message and is
-// counted on the admin page, so it is the better place to absorb a short spike.
-export const VISITOR_MINUTE_LIMIT = 5;
-const VISITOR_DAY_LIMIT = 15;
-const GLOBAL_DAY_LIMIT = 60;
+// The old numbers assumed a single provider: Groq's 200K tokens/day at roughly 3K
+// tokens a turn is about 66 turns, so the site cap sat at 60. That is no longer the
+// binding constraint. Groq is now the first of three, and when its budget is gone the
+// chain falls through to OpenRouter and Gemini, whose free tiers are metered in
+// requests per day rather than tokens and are far larger. Holding the site to 60 turns
+// a day capped it at Groq-alone capacity while the other two sat unused, and handed
+// visitors "reached today's capacity" with plenty of headroom left.
+//
+// The per-visitor day cap of 15 was low enough that ordinary use ran into it: reading
+// through a few papers with follow-up questions gets there, and the site owner testing
+// his own chatbot got locked out of it in an afternoon. A cap nobody should reach in
+// good faith is the point; one that a genuine visitor reaches is just a broken feature.
+//
+// These caps are intentionally generous enough for normal follow-up use while still
+// bounding abuse. The site-wide cap is the hard budget for all configured providers.
+export const VISITOR_MINUTE_LIMIT = 10;
+const VISITOR_DAY_LIMIT = 100;
+const GLOBAL_DAY_LIMIT = 2500;
 const ADMIN_MINUTE_LIMIT = 10;
 const ADMIN_DAY_LIMIT = 50;
 const fallbackCounters = new Map();

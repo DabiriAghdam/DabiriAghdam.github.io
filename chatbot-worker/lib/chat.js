@@ -2,7 +2,7 @@ import { resetAuditForTests, updateAuditStatus, writeAuditMessage } from "./audi
 import { enforceRateLimit, resetRateLimitsForTests as resetRateLimitState, VISITOR_MINUTE_LIMIT } from "./rate-limit.js";
 import { buildSystemPrompt } from "./context/index.js";
 import { recordThrottle } from "./throttle.js";
-import { activeProviders, callChatProvider, createThoughtFilter, providerLabel } from "./providers.js";
+import { activeProviders, callChatProvider, createThoughtFilter, isDailyExhaustion, providerLabel } from "./providers.js";
 
 const GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_MODEL = "openai/gpt-oss-20b";
@@ -537,7 +537,10 @@ export async function handleChatRequest(request, env, ctx) {
     // A burst against the per-minute token ceiling clears in seconds; an exhausted
     // daily budget does not, and telling someone to "wait a moment" for something
     // that returns tomorrow just earns a string of failed retries.
-    const waitsHours = Number.isFinite(attempt.retryAfter) && attempt.retryAfter > 900;
+    // Not "is Retry-After large" but "is this budget coming back today": a 429 with no
+    // Retry-After at all used to fall through to the short message and tell a visitor
+    // to wait a moment, forever, for a daily budget that returns at midnight.
+    const waitsHours = isDailyExhaustion(attempt.retryAfter, attempt.detail);
     await recordThrottle(env.DB, waitsHours ? "upstream-exhausted" : "upstream-busy");
     if (Number.isFinite(attempt.retryAfter) && attempt.retryAfter > 0) {
       headers.set("Retry-After", String(Math.ceil(attempt.retryAfter)));

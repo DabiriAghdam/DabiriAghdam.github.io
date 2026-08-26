@@ -68,13 +68,18 @@ beforeEach(resetRateLimitsForTests);
 beforeEach(resetThrottleForTests);
 afterEach(() => { globalThis.fetch = realFetch; });
 
-test("keeps the daily caps within the Groq free-tier token budget", () => {
-  // gpt-oss-20b free tier allows 200K tokens/day and a turn costs roughly 3K, so
-  // the site-wide cap has to stay near 65 rather than the request-shaped 1,000/day.
-  assert.ok(limitsForTests.globalDay <= 65, "site-wide day cap must fit the token budget");
-  assert.ok(limitsForTests.day < limitsForTests.globalDay, "one visitor must not be able to spend the whole day");
-  // The minute cap governs burst UX, not the daily budget, so it is allowed to
-  // exceed the token-per-minute ceiling; Groq's throttle absorbs a short spike.
+test("uses the requested visitor and site-wide caps", () => {
+  assert.equal(limitsForTests.minute, 10);
+  assert.equal(limitsForTests.day, 100);
+  assert.equal(limitsForTests.globalDay, 2500);
+
+  // A visitor cap low enough to hit in good faith is a broken feature, not a guard:
+  // reading a few papers with follow-ups gets there, and so does testing the site.
+  assert.ok(limitsForTests.day * 5 <= limitsForTests.globalDay,
+    "no single visitor may consume a meaningful share of the day");
+
+  // The minute cap governs burst UX, not the daily budget. The panel offers follow-up
+  // chips, so clicking two in a row must never hit a hard error.
   assert.ok(limitsForTests.minute >= 5, "a visitor must be able to click several follow-up chips in a row");
 });
 
@@ -826,4 +831,38 @@ test("does not replay the ending when the visitor disconnects as it closes", asy
   assert.equal(assistants.length, 1, "the answer must be recorded exactly once");
   assert.equal(assistants[0].content, "Amir studies LLM agents.");
   assert.equal(assistants[0].status, "accepted");
+});
+
+test("says come back tomorrow when a 429 carries no Retry-After but names a daily limit", async () => {
+  // Every provider is out for the day and none sends Retry-After. This previously
+  // told the visitor to "wait a moment" on every single attempt, indefinitely.
+  const spent = (body) => () => Response.json(body, { status: 429 });
+  mockChain({
+    "api.groq.com": spent({ error: { message: "Rate limit reached for model `openai/gpt-oss-20b` on tokens per day (TPD): Limit 200000, Used 200000.", code: "rate_limit_exceeded" } }),
+    "openrouter.ai": spent({ error: { message: "Rate limit exceeded: free-models-per-day", code: 429 } }),
+    "generativelanguage.googleapis.com": spent({ error: { code: 429, message: "You exceeded your current quota. limit per day: 1500", status: "RESOURCE_EXHAUSTED" } }),
+  });
+  const response = await handleChatRequest(request([{ role: "user", content: "What does Amir research?" }]), fallbackEnv);
+  assert.equal(response.status, 429);
+  const body = await response.json();
+  assert.match(body.error, /tomorrow/i);
+  assert.doesNotMatch(body.error, /wait a moment/i);
+  // It must also be counted as exhaustion, not as a passing burst, or the dashboard
+  // warning that says "the daily budget ran out" never fires.
+  const throttle = await getThrottleStats(undefined);
+  assert.equal(throttle.byKind["upstream-exhausted"], 1);
+  assert.equal(throttle.byKind["upstream-busy"] || 0, 0);
+});
+
+test("still says wait a moment for a per-minute burst with no Retry-After", async () => {
+  mockChain({
+    "api.groq.com": () => Response.json({ error: { message: "Rate limit reached on tokens per minute (TPM): Limit 8000, Used 7900. Please try again in 1.5s." } }, { status: 429 }),
+    "openrouter.ai": () => Response.json({ error: { message: "Rate limit reached on tokens per minute (TPM)." } }, { status: 429 }),
+    "generativelanguage.googleapis.com": () => Response.json({ error: { message: "Resource exhausted, please try again shortly." } }, { status: 429 }),
+  });
+  const response = await handleChatRequest(request([{ role: "user", content: "What does Amir research?" }]), fallbackEnv);
+  assert.equal(response.status, 429);
+  assert.match((await response.json()).error, /wait a moment/i);
+  const throttle = await getThrottleStats(undefined);
+  assert.equal(throttle.byKind["upstream-busy"], 1);
 });

@@ -124,6 +124,19 @@ export function isContentRejection(status, body) {
   return CONTENT_REJECTION.test(text);
 }
 
+// A 429 says "slow down"; only the body says for how long. Groq distinguishes its
+// per-minute bucket from its per-day one in the message ("on tokens per minute (TPM)"
+// versus "tokens per day (TPD)"), Gemini names "limit per day", and OpenRouter returns
+// "free-models-per-day". Retry-After is the better signal when it is present, but it
+// is not always sent — and a missing header must not be read as "try again shortly",
+// which would tell a visitor to wait a moment for a budget that returns tomorrow.
+const DAILY_EXHAUSTION = /per[ -]day|\bTPD\b|\bRPD\b|\bdaily\b|per day/i;
+
+export function isDailyExhaustion(retryAfter, body = "") {
+  if (Number.isFinite(retryAfter) && retryAfter > 0) return retryAfter > 900;
+  return DAILY_EXHAUSTION.test(classifiableText(body));
+}
+
 export function activeProviders(env) {
   return PROVIDERS
     .filter((provider) => env[provider.keyVar])
@@ -213,6 +226,7 @@ export async function callChatProvider(env, { messages, systemPrompt, wantsStrea
       provider: provider.name,
       status: response.status,
       retryAfter: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+      detail,
     });
   }
 
