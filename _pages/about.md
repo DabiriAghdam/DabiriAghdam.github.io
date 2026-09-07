@@ -28,7 +28,7 @@ My research is on large language models (LLMs), vision-language models, LLM agen
 Check out my [CV](/assets/pdf/Dabiriaghdam_CV.pdf) and [publications](/publications/) for more details.
 
 <div class="chatbot-callout">
-  <p class="chatbot-callout__lead"><i class="fas fa-comment-dots" aria-hidden="true"></i> Short on time? Just ask the LLM what you want to know about me, it knows my papers, background, and what I’m working on.</p>
+  <p class="chatbot-callout__lead"><i class="fas fa-comment-dots" aria-hidden="true"></i> Short on time? Just ask the LLM what you want to know about me; it knows my papers, background, and what I’m working on.</p>
   <div class="chatbot-callout__questions">
     <button type="button" class="chatbot-paper-button" data-chatbot-open-question="What does Amir research?">What does he research?</button>
     <button type="button" class="chatbot-paper-button" data-chatbot-open-question="Is Amir open to collaborations?">Open to collaborations?</button>
