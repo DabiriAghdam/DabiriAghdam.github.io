@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Amir's AI Assistant API",
-  description: "The secure Groq gateway for AmirHossein DabiriAghdam's personal website.",
+  description: "The secure Groq gateway for Amirhossein Dabiriaghdam's personal website.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

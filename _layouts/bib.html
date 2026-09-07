@@ -128,11 +128,15 @@
           {%- else -%}
             {%- capture entrytype -%}{%- endcapture -%}
           {%- endif -%}
-          {%- if entry.month -%}
+          {%- if entry.month and entry.status != "preprint" -%}
             {%- capture entrymonth -%}{{ " " }}{{ entry.month | capitalize }}{%- endcapture -%}
           {%- endif -%}
-          {%- if entry.year -%}
+          {%- if entry.year and entry.status != "preprint" -%}
             {%- capture entryyear -%}{{ ", " }}{{entry.year}}{%- endcapture -%}
+          {%- endif -%}
+          {%- if entry.submitted -%}
+            {%- capture submitted_date -%}{{ entry.submitted | date: "%B %-d, %Y" }}{%- endcapture -%}
+            {%- capture submitted_label -%}{{ " · " }}<time datetime="{{ entry.submitted }}">Submitted {{ submitted_date }}</time>{%- endcapture -%}
           {%- endif -%}
           {%- capture presentation -%}
             {%- if entry.presentation -%}
@@ -145,7 +149,7 @@
           {%- capture co_location -%}
             {%- if entry.co_located_with -%}{{ " · Co-located with " }}{{ entry.co_located_with }}{%- endif -%}
           {%- endcapture -%}
-          {%- capture periodical -%}{{ entrytype }}{{ entrymonth }}{{ entryyear }}{{ presentation }}{{ presentation_rate }}{{ co_location }}{%- endcapture -%}
+          {%- capture periodical -%}{{ entrytype }}{{ entrymonth }}{{ entryyear }}{{ submitted_label }}{{ presentation }}{{ presentation_rate }}{{ co_location }}{%- endcapture -%}
           <div class="periodical">
             {{ periodical | strip }}
           </div>
