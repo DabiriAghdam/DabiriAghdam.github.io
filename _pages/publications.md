@@ -4,6 +4,7 @@ permalink: /publications/
 title: Publications
 description: Amirhossein Dabiriaghdam's peer-reviewed publications and preprints.
 peer_reviewed_years: [2025, 2024, 2023]
+preprint_years: [2026]
 nav: true
 nav_order: 1
 ---
@@ -19,7 +20,10 @@ nav_order: 1
 {% endfor %}
 
 <h2>Preprints</h2>
-{% bibliography -f papers -q @*[status=preprint]* %}
+{%- for y in page.preprint_years %}
+  <h2 class="year">{{y}}</h2>
+  {% bibliography -f papers -q @*[status=preprint,year={{y}}]* %}
+{% endfor %}
 
 <h2>Master's Thesis</h2>
 {% bibliography -f papers -q @mastersthesis %}
