@@ -49,6 +49,9 @@ layout: default
             <!-- Selected papers -->
             {%- include selected_papers.html %}
           {%- endif %}
+          {% if page.teaching -%}
+            {%- include teaching.html %}
+          {%- endif %}
           {%- if page.social %}
           <!-- Social -->
           <div class="social">

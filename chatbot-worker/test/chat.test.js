@@ -384,7 +384,7 @@ test("keeps withheld personal identifiers out of the system prompt", async () =>
 test("anchors the profile to a known freshness date", async () => {
   const calls = mockGroq("Amir researches LLM agents.");
   await handleChatRequest(request([{ role: "user", content: "What is Amir doing lately?" }]), env);
-  assert.match(calls[1].messages[0].content, /last updated in August 2026/);
+  assert.match(calls[1].messages[0].content, /last updated in September 2026/);
   assert.match(calls[1].messages[0].content, /information may not be current/);
 });
 

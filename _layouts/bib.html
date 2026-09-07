@@ -135,10 +135,12 @@
             {%- capture entryyear -%}{{ ", " }}{{entry.year}}{%- endcapture -%}
           {%- endif -%}
           {%- capture presentation -%}
-            {%- if entry.presentation -%}{{ " " }}<em>{{ entry.presentation }}</em>{%- endif -%}
+            {%- if entry.presentation -%}
+              {{ " " }}<span class="publication-presentation">{{ entry.presentation }}{%- if entry.presentation_rate -%}{{ " " }}{{ entry.presentation_rate }}{%- endif -%}</span>
+            {%- endif -%}
           {%- endcapture -%}
           {%- capture presentation_rate -%}
-            {%- if entry.presentation_rate -%}{{ " · " }}{{ entry.presentation_rate }}{%- endif -%}
+            {%- if entry.presentation_rate and entry.presentation == nil -%}{{ " · " }}{{ entry.presentation_rate }}{%- endif -%}
           {%- endcapture -%}
           {%- capture co_location -%}
             {%- if entry.co_located_with -%}{{ " · Co-located with " }}{{ entry.co_located_with }}{%- endif -%}
