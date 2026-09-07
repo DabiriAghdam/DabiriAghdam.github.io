@@ -128,6 +128,9 @@
           {%- else -%}
             {%- capture entrytype -%}{%- endcapture -%}
           {%- endif -%}
+          {%- assign entrymonth = "" -%}
+          {%- assign entryyear = "" -%}
+          {%- assign submitted_label = "" -%}
           {%- if entry.month and entry.status != "preprint" -%}
             {%- capture entrymonth -%}{{ " " }}{{ entry.month | capitalize }}{%- endcapture -%}
           {%- endif -%}
