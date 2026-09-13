@@ -19,7 +19,7 @@ social: true  # includes social icons at the bottom of the page
 
 Hi there, I am Amir! 👋
 
-I'm a Ph.D. student in Electrical and Computer Engineering at the [University of British Columbia (UBC)](https://www.ubc.ca/), where I am co-supervised by [Prof. Giuseppe Carenini](https://www.cs.ubc.ca/~carenini/) and [Prof. Lele Wang](https://ece.ubc.ca/lele-wang/). I hold a UBC Four Year Doctoral Fellowship (2025–2029).
+I'm a Ph.D. student in Electrical and Computer Engineering at the [University of British Columbia (UBC)](https://www.ubc.ca/), where I am co-supervised by [Prof. Giuseppe Carenini](https://www.cs.ubc.ca/~carenini/) and [Prof. Lele Wang](https://ece.ubc.ca/lele-wang/). I hold a UBC Four Year Doctoral Fellowship.
 
 I hold a master's degree from UBC as well, and a B.Sc. degree from the [University of Tehran](https://ut.ac.ir/en). During my undergrad, I also did an internship at [EPFL](https://www.epfl.ch/) [LTS4 lab](https://www.epfl.ch/labs/lts4/), where I worked under [Prof. Pascal Frossard](https://people.epfl.ch/pascal.frossard) on adversarial attacks against neural machine translation models.
 
