@@ -4,7 +4,7 @@ title: About
 nav: true
 nav_order: 0
 permalink: /
-subtitle: "Ph.D. Student & Researcher | LLM Agents, Multimodal Reasoning & NLP | Vancouver, Canada"
+subtitle: "Ph.D. Student & Researcher | LLM Agents and World Models | Vancouver, Canada"
 
 profile:
   align: right
